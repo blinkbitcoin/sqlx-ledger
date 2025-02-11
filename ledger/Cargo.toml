@@ -35,7 +35,7 @@ tokio = { version = "1.28", features = ["macros"] }
 uuid = { version = "1.3", features = ["serde", "v4"] }
 rusty-money = { version = "0.4", features = ["iso", "crypto"] }
 tracing = "0.1"
-opentelemetry = { version = "0.27", optional = true }
+opentelemetry = { version = "0.28", optional = true }
 tracing-opentelemetry = { version = "0.28", optional = true }
 cached = { version = "0.54.0", features = ["async"] }
 

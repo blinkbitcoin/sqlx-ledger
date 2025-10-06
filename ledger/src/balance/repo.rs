@@ -226,18 +226,19 @@ impl Balances {
             r#"INSERT INTO sqlx_ledger_current_balances
                   (journal_id, account_id, currency, version)"#,
         );
-        let mut any_new = false;
-        query_builder.push_values(
-            previous_versions.iter().filter(|(_, v)| **v == 0),
-            |mut builder, ((account_id, currency), version)| {
-                any_new = true;
-                builder.push_bind(journal_id);
-                builder.push_bind(**account_id);
-                builder.push_bind(currency.code());
-                builder.push_bind(version);
-            },
-        );
+        let new_accounts: Vec<_> = previous_versions.iter().filter(|(_, v)| **v == 0).collect();
+        let any_new = !new_accounts.is_empty();
+
         if any_new {
+            query_builder.push_values(
+                new_accounts,
+                |mut builder, ((account_id, currency), version)| {
+                    builder.push_bind(journal_id);
+                    builder.push_bind(**account_id);
+                    builder.push_bind(currency.code());
+                    builder.push_bind(version);
+                },
+            );
             query_builder.build().execute(&mut **tx).await?;
         }
         let mut query_builder: QueryBuilder<Postgres> =

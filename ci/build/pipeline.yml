@@ -1,0 +1,301 @@
+groups:
+- name: sqlx-ledger
+  jobs:
+  - check-code
+  - integration-tests
+  - release
+  - set-dev-version
+jobs:
+- name: check-code
+  serial: true
+  plan:
+  - in_parallel:
+    - get: repo
+      trigger: true
+    - get: pipeline-tasks
+  - task: check-code
+    config:
+      platform: linux
+      image_resource:
+        type: registry-image
+        source:
+          username: ((docker-creds.username))
+          password: ((docker-creds.password))
+          repository: us.gcr.io/galoy-org/rust-concourse
+      inputs:
+      - name: pipeline-tasks
+      - name: repo
+      caches:
+      - path: cargo-home
+      - path: cargo-target-dir
+      run:
+        path: pipeline-tasks/ci/vendor/tasks/rust-check-code.sh
+  on_failure:
+    put: slack
+    params:
+      channel: sqlx-ledger-github
+      username: concourse
+      icon_url: https://cl.ly/2F421Y300u07/concourse-logo-blue-transparent.png
+      text: '<$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME| :face_with_symbols_on_mouth: $BUILD_JOB_NAME> failed!'
+- name: integration-tests
+  serial: true
+  plan:
+  - put: docker-host
+    params:
+      acquire: true
+  - in_parallel:
+    - get: repo
+      trigger: true
+    - get: pipeline-tasks
+  - task: integration-tests
+    timeout: 12m
+    tags:
+    - galoy-staging
+    config:
+      platform: linux
+      image_resource:
+        type: registry-image
+        source:
+          username: ((docker-creds.username))
+          password: ((docker-creds.password))
+          repository: us.gcr.io/galoy-org/rust-concourse
+      inputs:
+      - name: pipeline-tasks
+      - name: docker-host
+      - name: repo
+        path: sqlx-ledger-integration-tests
+      caches:
+      - path: cargo-home
+      - path: cargo-target-dir
+      params:
+        REPO_PATH: sqlx-ledger-integration-tests
+        GOOGLE_CREDENTIALS: ((staging-gcp-creds.creds_json))
+        SSH_PRIVATE_KEY: ((staging-ssh.ssh_private_key))
+        SSH_PUB_KEY: ((staging-ssh.ssh_public_key))
+        TEST_CONTAINER: integration-tests
+        JEST_TIMEOUT: 90000
+      run:
+        path: pipeline-tasks/ci/vendor/tasks/test-on-docker-host.sh
+    ensure:
+      put: docker-host
+      params:
+        release: docker-host
+  on_failure:
+    put: slack
+    params:
+      channel: sqlx-ledger-github
+      username: concourse
+      icon_url: https://cl.ly/2F421Y300u07/concourse-logo-blue-transparent.png
+      text: '<$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME| :face_with_symbols_on_mouth: $BUILD_JOB_NAME> failed!'
+- name: release
+  serial: true
+  plan:
+  - in_parallel:
+    - get: repo
+      passed:
+      - integration-tests
+      - check-code
+    - get: pipeline-tasks
+    - get: version
+  - task: prep-release
+    config:
+      platform: linux
+      image_resource:
+        type: registry-image
+        source:
+          username: ((docker-creds.username))
+          password: ((docker-creds.password))
+          repository: us.gcr.io/galoy-org/release-pipeline
+      inputs:
+      - name: pipeline-tasks
+      - name: repo
+      - name: version
+      outputs:
+      - name: version
+      - name: artifacts
+      run:
+        path: pipeline-tasks/ci/vendor/tasks/prep-release-src.sh
+  - task: update-repo
+    config:
+      platform: linux
+      image_resource:
+        type: registry-image
+        source:
+          username: ((docker-creds.username))
+          password: ((docker-creds.password))
+          repository: us.gcr.io/galoy-org/rust-concourse
+      inputs:
+      - name: artifacts
+      - name: pipeline-tasks
+      - name: repo
+      - name: version
+      outputs:
+      - name: repo
+      run:
+        path: pipeline-tasks/ci/tasks/update-repo.sh
+  - task: publish-to-crates
+    config:
+      image_resource:
+        type: registry-image
+        source:
+          username: ((docker-creds.username))
+          password: ((docker-creds.password))
+          repository: us.gcr.io/galoy-org/rust-concourse
+      platform: linux
+      inputs:
+      - name: version
+      - name: pipeline-tasks
+      - name: repo
+      params:
+        CRATES_API_TOKEN: ((crates.token))
+      caches:
+      - path: cargo-home
+      - path: cargo-target-dir
+      run:
+        path: pipeline-tasks/ci/tasks/publish-to-crates.sh
+  - put: repo
+    params:
+      tag: artifacts/gh-release-tag
+      repository: repo
+      merge: true
+  - put: version
+    params:
+      file: version/version
+  - put: gh-release
+    params:
+      name: artifacts/gh-release-name
+      tag: artifacts/gh-release-tag
+      body: artifacts/gh-release-notes.md
+- name: set-dev-version
+  plan:
+  - in_parallel:
+    - get: repo
+      passed:
+      - release
+    - get: pipeline-tasks
+    - get: version
+      trigger: true
+      params:
+        bump: patch
+      passed:
+      - release
+  - task: set-dev-version
+    config:
+      image_resource:
+        type: registry-image
+        source:
+          username: ((docker-creds.username))
+          password: ((docker-creds.password))
+          repository: us.gcr.io/galoy-org/release-pipeline
+      platform: linux
+      inputs:
+      - name: version
+      - name: repo
+      - name: pipeline-tasks
+      outputs:
+      - name: repo
+      run:
+        path: pipeline-tasks/ci/tasks/set-dev-version.sh
+      params:
+        BRANCH: fix-query-builder
+  - put: repo
+    params:
+      repository: repo
+      rebase: true
+resources:
+- name: repo
+  type: git
+  source:
+    ignore_paths:
+    - ci/*[^md]
+    fetch_tags: true
+    uri: git@github.com:blinkbitcoin/sqlx-ledger.git
+    branch: fix-query-builder
+    private_key: ((github-blinkbitcoin.private_key))
+  webhook_token: ((webhook.secret))
+- name: pipeline-tasks
+  type: git
+  source:
+    paths:
+    - ci/vendor/*
+    - ci/tasks/*
+    - ci/config/*
+    - Makefile
+    uri: git@github.com:blinkbitcoin/sqlx-ledger.git
+    branch: fix-query-builder
+    private_key: ((github-blinkbitcoin.private_key))
+- name: slack
+  type: slack-notification
+  source:
+    url: ((addons-slack.api_url))
+- name: version
+  type: semver
+  source:
+    initial_version: 0.0.0
+    driver: git
+    file: version
+    uri: git@github.com:blinkbitcoin/sqlx-ledger.git
+    branch: version
+    private_key: ((github-blinkbitcoin.private_key))
+- name: gh-release
+  type: github-release
+  source:
+    owner: blinkbitcoin
+    repository: sqlx-ledger
+    access_token: ((github-blinkbitcoin.api_token))
+- name: docker-host
+  type: pool
+  source:
+    uri: git@github.com:GaloyMoney/concourse-locks.git
+    branch: main
+    pool: docker-hosts
+    private_key: ((github-blinkbitcoin.private_key))
+resource_types:
+- name: slack-notification
+  type: docker-image
+  source:
+    repository: cfcommunity/slack-notification-resource
+---
+apiVersion: vendir.k14s.io/v1alpha1
+directories:
+- contents:
+  - git:
+      commitTitle: 'chore: add webhook config'
+      sha: 9d0f008e41df2f5d5e0461171c02fc0c4aee1d6f
+    path: .
+  path: ../.github/workflows/vendor
+- contents:
+  - git:
+      commitTitle: 'chore: add webhook config'
+      sha: 9d0f008e41df2f5d5e0461171c02fc0c4aee1d6f
+    path: .
+  path: ./vendor
+kind: LockConfig
+---
+apiVersion: vendir.k14s.io/v1alpha1
+kind: Config
+directories:
+- path: ../.github/workflows/vendor
+  contents:
+  - path: .
+    git:
+      url: https://github.com/GaloyMoney/concourse-shared.git
+      ref: 9d0f008e41df2f5d5e0461171c02fc0c4aee1d6f
+    includePaths:
+    - shared/actions/*
+    excludePaths:
+    - shared/actions/nodejs-*
+    - shared/actions/chart-*
+    newRootPath: shared/actions
+- path: ./vendor
+  contents:
+  - path: .
+    git:
+      url: https://github.com/GaloyMoney/concourse-shared.git
+      ref: 9d0f008e41df2f5d5e0461171c02fc0c4aee1d6f
+    includePaths:
+    - shared/ci/**/*
+    excludePaths:
+    - shared/ci/**/nodejs-*
+    - shared/ci/**/chart-*
+    newRootPath: shared/ci

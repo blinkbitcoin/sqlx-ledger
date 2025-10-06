@@ -147,6 +147,8 @@
 
 #![cfg_attr(feature = "fail-on-warnings", deny(warnings))]
 #![cfg_attr(feature = "fail-on-warnings", deny(clippy::all))]
+#![allow(clippy::result_large_err)]
+#![allow(clippy::large_enum_variant)]
 
 pub mod account;
 pub mod balance;

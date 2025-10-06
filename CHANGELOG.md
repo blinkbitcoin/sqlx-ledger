@@ -1,3 +1,13 @@
+# [sqlx-ledger release v0.11.6](https://github.com/GaloyMoney/sqlx-ledger/releases/tag/v0.11.6)
+
+
+### Bug Fixes
+
+- Nix rust configuration
+- Ci check-code.yml
+- Ignore clippy large variant error
+- First check the version for pushing values
+
 # [sqlx-ledger release v0.11.3](https://github.com/GaloyMoney/sqlx-ledger/releases/tag/v0.11.3)
 
 

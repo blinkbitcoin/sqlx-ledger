@@ -42,5 +42,5 @@ cached = { version = "0.54.0", features = ["async"] }
 
 [dev-dependencies]
 anyhow = "1.0"
-rand = "0.8"
+rand = "0.9"
 tokio-test = "0.4"

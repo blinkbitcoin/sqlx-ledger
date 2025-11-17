@@ -309,6 +309,7 @@ pub(crate) async fn subscribe(
                 reload = true;
             }
         }
+        let _ = listener.unlisten("sqlx_ledger_events").await;
     });
     Ok(recv)
 }

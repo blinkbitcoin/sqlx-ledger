@@ -1,3 +1,10 @@
+# [sqlx-ledger release v0.11.9](https://github.com/GaloyMoney/sqlx-ledger/releases/tag/v0.11.9)
+
+
+### Bug Fixes
+
+- Add unlisten after events loop (#105)
+
 # [sqlx-ledger release v0.11.8](https://github.com/GaloyMoney/sqlx-ledger/releases/tag/v0.11.8)
 
 

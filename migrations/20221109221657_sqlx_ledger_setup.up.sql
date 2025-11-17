@@ -146,15 +146,17 @@ CREATE FUNCTION notify_sqlx_ledger_events() RETURNS TRIGGER AS $$
 DECLARE
   payload TEXT;
 BEGIN
-  -- Sending minimal payload to avoid pg_notify 8KB limit with large transactions.
-  -- The full event data will be fetched from the database by subscribers.
-  -- For an alternative that avoids the extra query but may exceed 8KB, use:
-  -- payload := row_to_json(NEW);
-  payload := json_build_object(
-    'id', NEW.id,
-    'type', NEW.type,
-    'recorded_at', NEW.recorded_at
-  )::text;
+  payload := row_to_json(NEW)::text;
+
+  -- If payload exceeds pg_notify's 8KB limit send minimal payload
+  IF octet_length(payload) > 8000 THEN
+    payload := json_build_object(
+      'id', NEW.id,
+      'type', NEW.type,
+      'recorded_at', NEW.recorded_at
+    )::text;
+  END IF;
+
   PERFORM pg_notify('sqlx_ledger_events', payload);
   RETURN NULL;
 END;

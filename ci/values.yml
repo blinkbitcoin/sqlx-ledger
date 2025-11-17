@@ -1,7 +1,7 @@
 #@data/values
 ---
 git_uri: git@github.com:blinkbitcoin/sqlx-ledger.git
-git_branch: fix-query-builder
+git_branch: main
 github_private_key: ((github-blinkbitcoin.private_key))
 github_token: ((github-blinkbitcoin.api_token))
 

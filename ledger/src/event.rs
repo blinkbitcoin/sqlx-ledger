@@ -1,6 +1,6 @@
 //! Use [ledger.events()](crate::SqlxLedger::events()) to subscribe to events triggered by changes to the ledger.
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as _, Deserialize, Serialize};
 use sqlx::{postgres::PgListener, PgPool};
 use tokio::{
     sync::{
@@ -293,6 +293,12 @@ pub(crate) async fn subscribe(
             while let Ok(notification) = listener.recv().await {
                 let event: Result<SqlxLedgerEvent, _> =
                     serde_json::from_str(notification.payload());
+                if let Err(e) = &event {
+                    if e.to_string().contains("data field missing") {
+                        reload = true;
+                        break;
+                    }
+                }
                 match sqlx_ledger_notification_received(event, &snd, &mut last_id, !reload) {
                     Ok(false) => break,
                     Ok(_) => num_errors = 0,
@@ -331,7 +337,8 @@ fn sqlx_ledger_notification_received(
 #[derive(Deserialize)]
 struct EventRaw {
     id: SqlxLedgerEventId,
-    data: serde_json::Value,
+    #[serde(default)]
+    data: Option<serde_json::Value>,
     r#type: SqlxLedgerEventType,
     recorded_at: DateTime<Utc>,
 }
@@ -340,15 +347,19 @@ impl TryFrom<EventRaw> for SqlxLedgerEvent {
     type Error = serde_json::Error;
 
     fn try_from(value: EventRaw) -> Result<Self, Self::Error> {
+        let data_value = value
+            .data
+            .ok_or_else(|| serde_json::Error::custom("data field missing"))?;
+
         let data = match value.r#type {
             SqlxLedgerEventType::BalanceUpdated => {
-                SqlxLedgerEventData::BalanceUpdated(serde_json::from_value(value.data)?)
+                SqlxLedgerEventData::BalanceUpdated(serde_json::from_value(data_value)?)
             }
             SqlxLedgerEventType::TransactionCreated => {
-                SqlxLedgerEventData::TransactionCreated(serde_json::from_value(value.data)?)
+                SqlxLedgerEventData::TransactionCreated(serde_json::from_value(data_value)?)
             }
             SqlxLedgerEventType::TransactionUpdated => {
-                SqlxLedgerEventData::TransactionUpdated(serde_json::from_value(value.data)?)
+                SqlxLedgerEventData::TransactionUpdated(serde_json::from_value(data_value)?)
             }
         };
 

@@ -1,3 +1,14 @@
+# [sqlx-ledger release v0.11.8](https://github.com/GaloyMoney/sqlx-ledger/releases/tag/v0.11.8)
+
+
+### Bug Fixes
+
+- Pg_notify payload limit (#101)
+
+### Miscellaneous Tasks
+
+- Update rust version (#103)
+
 # [sqlx-ledger release v0.11.7](https://github.com/GaloyMoney/sqlx-ledger/releases/tag/v0.11.7)
 
 

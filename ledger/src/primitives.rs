@@ -32,10 +32,11 @@ impl<'a> TryFrom<CelResult<'a>> for Layer {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, sqlx::Type)]
 #[sqlx(type_name = "DebitOrCredit", rename_all = "snake_case")]
 pub enum DebitOrCredit {
     Debit,
+    #[default]
     Credit,
 }
 
@@ -51,22 +52,11 @@ impl<'a> TryFrom<CelResult<'a>> for DebitOrCredit {
     }
 }
 
-impl Default for DebitOrCredit {
-    fn default() -> Self {
-        Self::Credit
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, sqlx::Type)]
 #[sqlx(type_name = "Status", rename_all = "snake_case")]
 pub enum Status {
+    #[default]
     Active,
-}
-
-impl Default for Status {
-    fn default() -> Self {
-        Self::Active
-    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, Serialize, Deserialize)]

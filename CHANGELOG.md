@@ -1,3 +1,10 @@
+# [sqlx-ledger release v0.11.11](https://github.com/GaloyMoney/sqlx-ledger/releases/tag/v0.11.11)
+
+
+### Bug Fixes
+
+- Update sqlx cache queries (#109)
+
 # [sqlx-ledger release v0.11.10](https://github.com/GaloyMoney/sqlx-ledger/releases/tag/v0.11.10)
 
 

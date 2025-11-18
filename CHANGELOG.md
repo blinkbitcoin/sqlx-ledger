@@ -1,3 +1,10 @@
+# [sqlx-ledger release v0.11.10](https://github.com/GaloyMoney/sqlx-ledger/releases/tag/v0.11.10)
+
+
+### Bug Fixes
+
+- Refactor events subscription (#108)
+
 # [sqlx-ledger release v0.11.9](https://github.com/GaloyMoney/sqlx-ledger/releases/tag/v0.11.9)
 
 

@@ -288,7 +288,11 @@ pub(crate) async fn subscribe(
                             }
                             Err(e) => {
                                 consecutive_errors += 1;
-                                tracing::error!("Error fetching events: {}", e);
+                                tracing::error!(
+                                    "Error fetching events after id {}: {}",
+                                    last_id.0,
+                                    e
+                                );
 
                                 if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
                                     tracing::error!("Max retries exceeded");
@@ -345,10 +349,9 @@ pub(crate) async fn subscribe(
                                 tokio::time::sleep(Duration::from_secs(1)).await;
                             }
                         }
-
-                        reload = true;
                     }
                     _ = tokio::time::sleep(Duration::from_secs(30)) => {
+                        // Health check: periodically verify stream is not closed
                         if closed.load(Ordering::Relaxed) {
                             return Ok(());
                         }
@@ -357,8 +360,8 @@ pub(crate) async fn subscribe(
             }
         };
 
-        let cleanup_result = subscriber_loop.await;
-        match cleanup_result {
+        let result = subscriber_loop.await;
+        match result {
             Ok(()) => tracing::info!("Subscriber shutting down gracefully"),
             Err(reason) => tracing::warn!("Subscriber shutting down: {}", reason),
         }

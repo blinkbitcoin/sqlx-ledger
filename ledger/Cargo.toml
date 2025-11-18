@@ -4,7 +4,7 @@ description = "An embeddable double sided accounting ledger built on PG/SQLx"
 repository = "https://github.com/GaloyMoney/sqlx-ledger"
 documentation = "https://docs.rs/sqlx-ledger"
 readme = "../README.md"
-version = "0.11.11"
+version = "0.11.12-dev"
 edition = "2021"
 license = "MIT"
 categories = ["finance"]
@@ -15,7 +15,7 @@ fail-on-warnings = []
 otel = ["opentelemetry", "tracing-opentelemetry"]
 
 [dependencies]
-cel-interpreter = { path = "../cel-interpreter", package = "sqlx-ledger-cel-interpreter", version = "0.11.11" }
+cel-interpreter = { path = "../cel-interpreter", package = "sqlx-ledger-cel-interpreter", version = "0.11.12-dev" }
 
 chrono = { version = "0.4", features = ["serde"] }
 rust_decimal = "1.30"

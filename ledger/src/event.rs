@@ -1,7 +1,9 @@
 //! Use [ledger.events()](crate::SqlxLedger::events()) to subscribe to events triggered by changes to the ledger.
 use chrono::{DateTime, Utc};
+use futures::StreamExt;
 use serde::{de::Error as _, Deserialize, Serialize};
 use sqlx::{postgres::PgListener, PgPool};
+use std::time::Duration;
 use tokio::{
     sync::{
         broadcast::{self, error::RecvError},
@@ -245,72 +247,127 @@ pub(crate) async fn subscribe(
     listener.listen("sqlx_ledger_events").await?;
     let (snd, recv) = broadcast::channel(buffer);
     let mut reload = after_id.is_some();
+
     task::spawn(async move {
-        let mut num_errors = 0;
         let mut last_id = after_id.unwrap_or(SqlxLedgerEventId(0));
-        loop {
-            if reload {
-                match sqlx::query!(
-                    r#"SELECT json_build_object(
-                      'id', id,
-                      'type', type,
-                      'data', data,
-                      'recorded_at', recorded_at
-                    ) AS "payload!" FROM sqlx_ledger_events WHERE id > $1 ORDER BY id"#,
-                    last_id.0
-                )
-                .fetch_all(&pool)
-                .await
-                {
-                    Ok(rows) => {
-                        num_errors = 0;
-                        for row in rows {
-                            let event: Result<SqlxLedgerEvent, _> =
-                                serde_json::from_value(row.payload);
-                            if sqlx_ledger_notification_received(event, &snd, &mut last_id, true)
+        let mut consecutive_errors = 0;
+        const MAX_RETRY_DELAY: u64 = 60;
+        const MAX_CONSECUTIVE_ERRORS: u32 = 5;
+
+        let subscriber_loop = async {
+            loop {
+                if reload {
+                    let mut stream = sqlx::query!(
+                        r#"SELECT json_build_object(
+                          'id', id,
+                          'type', type,
+                          'data', data,
+                          'recorded_at', recorded_at
+                        ) AS "payload!" FROM sqlx_ledger_events WHERE id > $1 ORDER BY id"#,
+                        last_id.0
+                    )
+                    .fetch(&pool);
+
+                    let mut stream_failed = false;
+                    while let Some(result) = stream.next().await {
+                        match result {
+                            Ok(row) => {
+                                consecutive_errors = 0;
+                                let event: Result<SqlxLedgerEvent, _> =
+                                    serde_json::from_value(row.payload);
+                                if sqlx_ledger_notification_received(
+                                    event,
+                                    &snd,
+                                    &mut last_id,
+                                    true,
+                                )
                                 .is_err()
-                            {
-                                closed.store(true, Ordering::SeqCst);
+                                {
+                                    return Err("channel closed");
+                                }
+                            }
+                            Err(e) => {
+                                consecutive_errors += 1;
+                                tracing::error!("Error fetching events: {}", e);
+
+                                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                                    tracing::error!("Max retries exceeded");
+                                    return Err("max retries");
+                                }
+
+                                let delay =
+                                    (1_u64 << consecutive_errors.min(6)).min(MAX_RETRY_DELAY);
+                                tokio::time::sleep(Duration::from_secs(delay)).await;
+                                stream_failed = true;
                                 break;
                             }
                         }
                     }
-                    Err(e) if num_errors == 0 => {
-                        tracing::error!("Error fetching events: {}", e);
-                        tokio::time::sleep(std::time::Duration::from_secs(1 << num_errors)).await;
-                        num_errors += 1;
+
+                    if stream_failed {
                         continue;
                     }
-                    _ => {
-                        num_errors = 0;
-                        continue;
-                    }
+
+                    reload = false;
                 }
-            }
-            if closed.load(Ordering::Relaxed) {
-                break;
-            }
-            while let Ok(notification) = listener.recv().await {
-                let event: Result<SqlxLedgerEvent, _> =
-                    serde_json::from_str(notification.payload());
-                if let Err(e) = &event {
-                    if e.to_string().contains("data field missing") {
+
+                if closed.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
+
+                tokio::select! {
+                    notification = listener.recv() => {
+                        match notification {
+                            Ok(n) => {
+                                let event: Result<SqlxLedgerEvent, _> =
+                                    serde_json::from_str(n.payload());
+
+                                if let Err(e) = &event {
+                                    tracing::warn!("Failed to parse: {}", e);
+                                    if e.to_string().contains("data field missing") {
+                                        reload = true;
+                                        continue;
+                                    }
+                                }
+
+                                match sqlx_ledger_notification_received(event, &snd, &mut last_id, false) {
+                                    Ok(false) => return Err("channel closed"),
+                                    Ok(_) => consecutive_errors = 0,
+                                    Err(_) => return Err("channel closed"),
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("Listener error: {}", e);
+                                consecutive_errors += 1;
+                                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                                    return Err("max retries");
+                                }
+                                tokio::time::sleep(Duration::from_secs(1)).await;
+                            }
+                        }
+
                         reload = true;
-                        break;
+                    }
+                    _ = tokio::time::sleep(Duration::from_secs(30)) => {
+                        if closed.load(Ordering::Relaxed) {
+                            return Ok(());
+                        }
                     }
                 }
-                match sqlx_ledger_notification_received(event, &snd, &mut last_id, !reload) {
-                    Ok(false) => break,
-                    Ok(_) => num_errors = 0,
-                    Err(_) => {
-                        closed.store(true, Ordering::SeqCst);
-                    }
-                }
-                reload = true;
             }
+        };
+
+        let cleanup_result = subscriber_loop.await;
+        match cleanup_result {
+            Ok(()) => tracing::info!("Subscriber shutting down gracefully"),
+            Err(reason) => tracing::warn!("Subscriber shutting down: {}", reason),
         }
-        let _ = listener.unlisten("sqlx_ledger_events").await;
+
+        if let Err(e) = listener.unlisten("sqlx_ledger_events").await {
+            tracing::warn!("Failed to unlisten from sqlx_ledger_events: {}", e);
+        }
     });
+
     Ok(recv)
 }
 

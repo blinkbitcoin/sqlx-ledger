@@ -38,7 +38,7 @@ tracing = "0.1"
 futures = "0.3"
 opentelemetry = { version = "0.27", optional = true }
 tracing-opentelemetry = { version = "0.28", optional = true }
-cached = { version = "0.54.0", features = ["async"] }
+cached = { version = "0.56.0", features = ["async"] }
 
 
 [dev-dependencies]

@@ -54,6 +54,11 @@
         devShells.default = mkShell (devEnvVars
           // {
             inherit nativeBuildInputs;
+            shellHook = ''
+              # Workaround for nixpkgs xcrun warnings on Darwin
+              # See: https://github.com/NixOS/nixpkgs/issues/376958
+              unset DEVELOPER_DIR
+            '';
           });
 
         formatter = alejandra;

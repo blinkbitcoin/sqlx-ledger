@@ -179,6 +179,12 @@ impl SqlxLedgerEventId {
     pub const BEGIN: Self = Self(0);
 }
 
+impl From<i64> for SqlxLedgerEventId {
+    fn from(value: i64) -> Self {
+        Self(value)
+    }
+}
+
 /// Representation of a ledger event.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(try_from = "EventRaw")]

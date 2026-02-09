@@ -404,14 +404,15 @@ async fn concurrent_producers_events_ordered() -> anyhow::Result<()> {
     Ok(())
 }
 
-// Verifies that close_on_lag=true closes the subscriber when the broadcast
-// buffer overflows. Uses a tiny buffer and floods events without reading.
+// Verifies that close_on_lag=true closes the subscriber when the internal
+// dispatch loop's `incoming` broadcast receiver overflows. With buffer=1, the
+// subscribe() producer sends events faster than the dispatch loop can consume
+// them, causing incoming.recv() to return RecvError::Lagged.
 #[tokio::test]
 async fn close_on_lag_closes_subscriber() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let (ledger, journal_id, sender_id, recipient_id, tx_code) = setup_ledger(&pool).await?;
 
-    // Smallest possible buffer to induce lag quickly
     let events = ledger
         .events(EventSubscriberOpts {
             close_on_lag: true,
@@ -420,9 +421,7 @@ async fn close_on_lag_closes_subscriber() -> anyhow::Result<()> {
         })
         .await?;
 
-    // Get a receiver but don't read from it — allow channels to lag
-    let _all_events = events.all().expect("subscriber should be open");
-
+    // Flood 20 transactions (~60 events) into a buffer of 1
     for _ in 0..20 {
         post_one_transaction(&ledger, &tx_code, journal_id, sender_id, recipient_id).await?;
     }

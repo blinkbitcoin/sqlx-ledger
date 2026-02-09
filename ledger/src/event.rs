@@ -344,6 +344,236 @@ struct EventRaw {
     recorded_at: DateTime<Utc>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use rust_decimal::Decimal;
+    use tokio::sync::broadcast;
+
+    use crate::balance::BalanceDetails;
+    use crate::{CorrelationId, Currency, EntryId, TransactionId, TxTemplateId};
+
+    /// Helper to construct a test BalanceUpdated event with a given ID.
+    fn make_balance_event(id: i64) -> SqlxLedgerEvent {
+        let now = Utc::now();
+        let journal_id = JournalId::new();
+        let account_id = AccountId::new();
+        let entry_id = EntryId::new();
+        let currency: Currency = "USD".parse().unwrap();
+
+        SqlxLedgerEvent {
+            id: SqlxLedgerEventId(id),
+            data: SqlxLedgerEventData::BalanceUpdated(BalanceDetails {
+                journal_id,
+                account_id,
+                entry_id,
+                currency,
+                settled_dr_balance: Decimal::ZERO,
+                settled_cr_balance: Decimal::ZERO,
+                settled_entry_id: entry_id,
+                settled_modified_at: now,
+                pending_dr_balance: Decimal::ZERO,
+                pending_cr_balance: Decimal::ZERO,
+                pending_entry_id: entry_id,
+                pending_modified_at: now,
+                encumbered_dr_balance: Decimal::ZERO,
+                encumbered_cr_balance: Decimal::ZERO,
+                encumbered_entry_id: entry_id,
+                encumbered_modified_at: now,
+                version: 1,
+                modified_at: now,
+                created_at: now,
+            }),
+            r#type: SqlxLedgerEventType::BalanceUpdated,
+            recorded_at: now,
+        }
+    }
+
+    /// Helper to construct a test TransactionCreated event with a given ID.
+    fn make_transaction_event(id: i64) -> SqlxLedgerEvent {
+        let now = Utc::now();
+        SqlxLedgerEvent {
+            id: SqlxLedgerEventId(id),
+            data: SqlxLedgerEventData::TransactionCreated(Transaction {
+                id: TransactionId::new(),
+                version: 1,
+                journal_id: JournalId::new(),
+                tx_template_id: TxTemplateId::new(),
+                effective: now.date_naive(),
+                correlation_id: CorrelationId::new(),
+                external_id: "test-ext".to_string(),
+                description: None,
+                metadata_json: None,
+                created_at: now,
+                modified_at: now,
+            }),
+            r#type: SqlxLedgerEventType::TransactionCreated,
+            recorded_at: now,
+        }
+    }
+
+    #[test]
+    fn notification_received_sends_event_and_updates_last_id() {
+        let (sender, mut recv) = broadcast::channel::<SqlxLedgerEvent>(16);
+        let mut last_id = SqlxLedgerEventId(0);
+        let event = make_balance_event(1);
+
+        let result = sqlx_ledger_notification_received(Ok(event), &sender, &mut last_id, false);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), true);
+        assert_eq!(last_id, SqlxLedgerEventId(1));
+
+        // Event should be in the channel
+        let received = recv.try_recv().unwrap();
+        assert_eq!(received.id, SqlxLedgerEventId(1));
+    }
+
+    #[test]
+    fn notification_received_skips_duplicate_id() {
+        let (sender, mut recv) = broadcast::channel::<SqlxLedgerEvent>(16);
+        let mut last_id = SqlxLedgerEventId(5);
+
+        // Send event with id=5 (same as last_id) — should be skipped
+        let event = make_balance_event(5);
+        let result = sqlx_ledger_notification_received(Ok(event), &sender, &mut last_id, false);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), true);
+        assert_eq!(last_id, SqlxLedgerEventId(5)); // unchanged
+
+        // Nothing in the channel
+        assert!(recv.try_recv().is_err());
+    }
+
+    #[test]
+    fn notification_received_skips_older_id() {
+        let (sender, mut recv) = broadcast::channel::<SqlxLedgerEvent>(16);
+        let mut last_id = SqlxLedgerEventId(10);
+
+        // Send event with id=3 (older than last_id=10) — should be skipped
+        let event = make_balance_event(3);
+        let result = sqlx_ledger_notification_received(Ok(event), &sender, &mut last_id, false);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), true);
+        assert_eq!(last_id, SqlxLedgerEventId(10)); // unchanged
+
+        assert!(recv.try_recv().is_err());
+    }
+
+    #[test]
+    fn notification_received_detects_gap_when_ignore_gap_false() {
+        let (sender, mut recv) = broadcast::channel::<SqlxLedgerEvent>(16);
+        let mut last_id = SqlxLedgerEventId(1);
+
+        // Send event with id=5 (gap: last_id+1=2 != 5) and ignore_gap=false
+        let event = make_balance_event(5);
+        let result = sqlx_ledger_notification_received(Ok(event), &sender, &mut last_id, false);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), false); // signals gap detected
+        assert_eq!(last_id, SqlxLedgerEventId(1)); // unchanged
+
+        // Event was NOT sent to channel
+        assert!(recv.try_recv().is_err());
+    }
+
+    #[test]
+    fn notification_received_ignores_gap_when_flag_set() {
+        let (sender, mut recv) = broadcast::channel::<SqlxLedgerEvent>(16);
+        let mut last_id = SqlxLedgerEventId(1);
+
+        // Send event with id=5 (gap) but ignore_gap=true — should be accepted
+        let event = make_balance_event(5);
+        let result = sqlx_ledger_notification_received(Ok(event), &sender, &mut last_id, true);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), true);
+        assert_eq!(last_id, SqlxLedgerEventId(5)); // updated
+
+        let received = recv.try_recv().unwrap();
+        assert_eq!(received.id, SqlxLedgerEventId(5));
+    }
+
+    #[test]
+    fn notification_received_propagates_deserialization_error() {
+        let (sender, _recv) = broadcast::channel::<SqlxLedgerEvent>(16);
+        let mut last_id = SqlxLedgerEventId(0);
+
+        // Simulate a deserialization error
+        let deser_err: Result<SqlxLedgerEvent, _> = serde_json::from_str::<SqlxLedgerEvent>("{}");
+        assert!(deser_err.is_err());
+
+        let result =
+            sqlx_ledger_notification_received(deser_err, &sender, &mut last_id, false);
+        assert!(result.is_err());
+        assert_eq!(last_id, SqlxLedgerEventId(0)); // unchanged
+    }
+
+    #[test]
+    fn notification_received_errors_when_no_receivers() {
+        // Create sender but drop all receivers — send() will return Err
+        let (sender, recv) = broadcast::channel::<SqlxLedgerEvent>(16);
+        drop(recv);
+        let mut last_id = SqlxLedgerEventId(0);
+
+        let event = make_balance_event(1);
+        let result = sqlx_ledger_notification_received(Ok(event), &sender, &mut last_id, false);
+        // Should error because there are no receivers
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn notification_received_sequential_ids() {
+        let (sender, mut recv) = broadcast::channel::<SqlxLedgerEvent>(16);
+        let mut last_id = SqlxLedgerEventId(0);
+
+        for i in 1..=5 {
+            let event = make_balance_event(i);
+            let result =
+                sqlx_ledger_notification_received(Ok(event), &sender, &mut last_id, false);
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), true);
+            assert_eq!(last_id, SqlxLedgerEventId(i));
+        }
+
+        // All 5 events should be in the channel
+        for i in 1..=5 {
+            let received = recv.try_recv().unwrap();
+            assert_eq!(received.id, SqlxLedgerEventId(i));
+        }
+    }
+
+    #[test]
+    fn notification_received_handles_transaction_event() {
+        let (sender, mut recv) = broadcast::channel::<SqlxLedgerEvent>(16);
+        let mut last_id = SqlxLedgerEventId(0);
+
+        let event = make_transaction_event(1);
+        let result = sqlx_ledger_notification_received(Ok(event), &sender, &mut last_id, false);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), true);
+        assert_eq!(last_id, SqlxLedgerEventId(1));
+
+        let received = recv.try_recv().unwrap();
+        assert!(matches!(
+            received.r#type,
+            SqlxLedgerEventType::TransactionCreated
+        ));
+    }
+
+    #[test]
+    fn notification_received_data_field_missing_error_string() {
+        // Verify that the "data field missing" error string matches what
+        // the subscribe loop checks for in the notification path
+        let raw_json = r#"{"id": 1, "type": "BalanceUpdated", "recorded_at": "2024-01-01T00:00:00Z"}"#;
+        let result: Result<SqlxLedgerEvent, _> = serde_json::from_str(raw_json);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("data field missing"),
+            "Expected 'data field missing' in error: {err_msg}"
+        );
+    }
+}
+
 impl TryFrom<EventRaw> for SqlxLedgerEvent {
     type Error = serde_json::Error;
 

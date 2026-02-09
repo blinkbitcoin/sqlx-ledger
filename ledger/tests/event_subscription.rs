@@ -108,7 +108,13 @@ async fn setup_ledger(
         .unwrap();
     ledger.tx_templates().create(new_template).await.unwrap();
 
-    Ok((ledger, journal_id, sender_account_id, recipient_account_id, tx_code))
+    Ok((
+        ledger,
+        journal_id,
+        sender_account_id,
+        recipient_account_id,
+        tx_code,
+    ))
 }
 
 /// Helper: post a single transaction and return its external_id.
@@ -243,11 +249,8 @@ async fn after_id_only_receives_subsequent_events() -> anyhow::Result<()> {
     // Receive all 3 events from first transaction
     let mut first_batch_ids = Vec::new();
     for _ in 0..3 {
-        let event = tokio::time::timeout(
-            tokio::time::Duration::from_secs(5),
-            all_events.recv(),
-        )
-        .await??;
+        let event =
+            tokio::time::timeout(tokio::time::Duration::from_secs(5), all_events.recv()).await??;
         first_batch_ids.push(event.id);
     }
 
@@ -309,11 +312,10 @@ async fn concurrent_producers_events_ordered() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
 
     // Capture current max event ID before our producers start
-    let baseline_id: i64 = sqlx::query_scalar::<_, i64>(
-        "SELECT COALESCE(MAX(id), 0) FROM sqlx_ledger_events",
-    )
-    .fetch_one(&pool)
-    .await?;
+    let baseline_id: i64 =
+        sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(id), 0) FROM sqlx_ledger_events")
+            .fetch_one(&pool)
+            .await?;
 
     // Spawn concurrent producers, each with its own unique accounts
     let num_producers = 5;
@@ -348,12 +350,11 @@ async fn concurrent_producers_events_ordered() -> anyhow::Result<()> {
     // Verify the expected number of events were created in the DB
     let total_transactions = num_producers * txns_per_producer;
     let expected_events = total_transactions * 3;
-    let actual_new_events: i64 = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM sqlx_ledger_events WHERE id > $1",
-    )
-    .bind(baseline_id)
-    .fetch_one(&pool)
-    .await?;
+    let actual_new_events: i64 =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sqlx_ledger_events WHERE id > $1")
+            .bind(baseline_id)
+            .fetch_one(&pool)
+            .await?;
     assert!(
         actual_new_events >= expected_events as i64,
         "Expected at least {expected_events} new events in DB, got {actual_new_events}"
@@ -449,10 +450,7 @@ async fn close_on_lag_closes_subscriber() -> anyhow::Result<()> {
 
     // Attempting to get a new receiver should fail with EventSubscriberClosed
     let result = events.all();
-    assert!(
-        result.is_err(),
-        "Expected EventSubscriberClosed but got Ok"
-    );
+    assert!(result.is_err(), "Expected EventSubscriberClosed but got Ok");
 
     Ok(())
 }
@@ -490,11 +488,10 @@ async fn large_payload_triggers_reload() -> anyhow::Result<()> {
     .await?;
 
     // Get the max event ID after the small transaction — this is our baseline
-    let baseline_max_id: i64 = sqlx::query_scalar::<_, i64>(
-        "SELECT COALESCE(MAX(id), 0) FROM sqlx_ledger_events",
-    )
-    .fetch_one(&pool)
-    .await?;
+    let baseline_max_id: i64 =
+        sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(id), 0) FROM sqlx_ledger_events")
+            .fetch_one(&pool)
+            .await?;
 
     // Now create a template with large metadata (>8KB)
     let large_tx_code = Alphanumeric.sample_string(&mut rand::thread_rng(), 32);
@@ -592,12 +589,11 @@ async fn large_payload_triggers_reload() -> anyhow::Result<()> {
         .unwrap();
 
     // Verify the events are in the DB with large metadata
-    let db_event_count: i64 = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM sqlx_ledger_events WHERE id > $1",
-    )
-    .bind(baseline_max_id)
-    .fetch_one(&pool)
-    .await?;
+    let db_event_count: i64 =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sqlx_ledger_events WHERE id > $1")
+            .bind(baseline_max_id)
+            .fetch_one(&pool)
+            .await?;
     assert!(
         db_event_count >= 3,
         "Expected at least 3 new events in DB, got {db_event_count}"

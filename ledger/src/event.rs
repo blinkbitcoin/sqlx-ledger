@@ -501,8 +501,7 @@ mod tests {
         let deser_err: Result<SqlxLedgerEvent, _> = serde_json::from_str::<SqlxLedgerEvent>("{}");
         assert!(deser_err.is_err());
 
-        let result =
-            sqlx_ledger_notification_received(deser_err, &sender, &mut last_id, false);
+        let result = sqlx_ledger_notification_received(deser_err, &sender, &mut last_id, false);
         assert!(result.is_err());
         assert_eq!(last_id, SqlxLedgerEventId(0)); // unchanged
     }
@@ -527,8 +526,7 @@ mod tests {
 
         for i in 1..=5 {
             let event = make_balance_event(i);
-            let result =
-                sqlx_ledger_notification_received(Ok(event), &sender, &mut last_id, false);
+            let result = sqlx_ledger_notification_received(Ok(event), &sender, &mut last_id, false);
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), true);
             assert_eq!(last_id, SqlxLedgerEventId(i));
@@ -563,7 +561,8 @@ mod tests {
     fn notification_received_data_field_missing_error_string() {
         // Verify that the "data field missing" error string matches what
         // the subscribe loop checks for in the notification path
-        let raw_json = r#"{"id": 1, "type": "BalanceUpdated", "recorded_at": "2024-01-01T00:00:00Z"}"#;
+        let raw_json =
+            r#"{"id": 1, "type": "BalanceUpdated", "recorded_at": "2024-01-01T00:00:00Z"}"#;
         let result: Result<SqlxLedgerEvent, _> = serde_json::from_str(raw_json);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();

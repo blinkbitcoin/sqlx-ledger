@@ -360,7 +360,6 @@ mod tests {
     use crate::balance::BalanceDetails;
     use crate::{CorrelationId, Currency, EntryId, TransactionId, TxTemplateId};
 
-    /// Helper to construct a test BalanceUpdated event with a given ID.
     fn make_balance_event(id: i64) -> SqlxLedgerEvent {
         let now = Utc::now();
         let journal_id = JournalId::new();
@@ -396,7 +395,6 @@ mod tests {
         }
     }
 
-    /// Helper to construct a test TransactionCreated event with a given ID.
     fn make_transaction_event(id: i64) -> SqlxLedgerEvent {
         let now = Utc::now();
         SqlxLedgerEvent {
@@ -430,7 +428,6 @@ mod tests {
         assert_eq!(result.unwrap(), true);
         assert_eq!(last_id, SqlxLedgerEventId(1));
 
-        // Event should be in the channel
         let received = recv.try_recv().unwrap();
         assert_eq!(received.id, SqlxLedgerEventId(1));
     }
@@ -440,14 +437,12 @@ mod tests {
         let (sender, mut recv) = broadcast::channel::<SqlxLedgerEvent>(16);
         let mut last_id = SqlxLedgerEventId(5);
 
-        // Send event with id=5 (same as last_id) — should be skipped
         let event = make_balance_event(5);
         let result = sqlx_ledger_notification_received(Ok(event), &sender, &mut last_id, false);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), true);
-        assert_eq!(last_id, SqlxLedgerEventId(5)); // unchanged
+        assert_eq!(last_id, SqlxLedgerEventId(5));
 
-        // Nothing in the channel
         assert!(recv.try_recv().is_err());
     }
 
@@ -456,12 +451,11 @@ mod tests {
         let (sender, mut recv) = broadcast::channel::<SqlxLedgerEvent>(16);
         let mut last_id = SqlxLedgerEventId(10);
 
-        // Send event with id=3 (older than last_id=10) — should be skipped
         let event = make_balance_event(3);
         let result = sqlx_ledger_notification_received(Ok(event), &sender, &mut last_id, false);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), true);
-        assert_eq!(last_id, SqlxLedgerEventId(10)); // unchanged
+        assert_eq!(last_id, SqlxLedgerEventId(10));
 
         assert!(recv.try_recv().is_err());
     }
@@ -471,14 +465,12 @@ mod tests {
         let (sender, mut recv) = broadcast::channel::<SqlxLedgerEvent>(16);
         let mut last_id = SqlxLedgerEventId(1);
 
-        // Send event with id=5 (gap: last_id+1=2 != 5) and ignore_gap=false
         let event = make_balance_event(5);
         let result = sqlx_ledger_notification_received(Ok(event), &sender, &mut last_id, false);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), false); // signals gap detected
-        assert_eq!(last_id, SqlxLedgerEventId(1)); // unchanged
+        assert_eq!(result.unwrap(), false);
+        assert_eq!(last_id, SqlxLedgerEventId(1));
 
-        // Event was NOT sent to channel
         assert!(recv.try_recv().is_err());
     }
 
@@ -487,12 +479,11 @@ mod tests {
         let (sender, mut recv) = broadcast::channel::<SqlxLedgerEvent>(16);
         let mut last_id = SqlxLedgerEventId(1);
 
-        // Send event with id=5 (gap) but ignore_gap=true — should be accepted
         let event = make_balance_event(5);
         let result = sqlx_ledger_notification_received(Ok(event), &sender, &mut last_id, true);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), true);
-        assert_eq!(last_id, SqlxLedgerEventId(5)); // updated
+        assert_eq!(last_id, SqlxLedgerEventId(5));
 
         let received = recv.try_recv().unwrap();
         assert_eq!(received.id, SqlxLedgerEventId(5));
@@ -503,13 +494,12 @@ mod tests {
         let (sender, _recv) = broadcast::channel::<SqlxLedgerEvent>(16);
         let mut last_id = SqlxLedgerEventId(0);
 
-        // Simulate a deserialization error
         let deser_err: Result<SqlxLedgerEvent, _> = serde_json::from_str::<SqlxLedgerEvent>("{}");
         assert!(deser_err.is_err());
 
         let result = sqlx_ledger_notification_received(deser_err, &sender, &mut last_id, false);
         assert!(result.is_err());
-        assert_eq!(last_id, SqlxLedgerEventId(0)); // unchanged
+        assert_eq!(last_id, SqlxLedgerEventId(0));
     }
 
     #[test]
@@ -521,7 +511,6 @@ mod tests {
 
         let event = make_balance_event(1);
         let result = sqlx_ledger_notification_received(Ok(event), &sender, &mut last_id, false);
-        // Should error because there are no receivers
         assert!(result.is_err());
     }
 
@@ -538,7 +527,6 @@ mod tests {
             assert_eq!(last_id, SqlxLedgerEventId(i));
         }
 
-        // All 5 events should be in the channel
         for i in 1..=5 {
             let received = recv.try_recv().unwrap();
             assert_eq!(received.id, SqlxLedgerEventId(i));

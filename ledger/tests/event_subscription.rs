@@ -168,10 +168,11 @@ async fn after_id_catches_up_on_many_events() -> anyhow::Result<()> {
     // Each transaction produces 3 events: 1 TransactionCreated + 2 BalanceUpdated
     let expected_min_events = num_transactions * 3;
     let mut received = Vec::new();
-    let timeout = tokio::time::Duration::from_secs(10);
+    let per_event_timeout = tokio::time::Duration::from_millis(500);
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
 
-    loop {
-        match tokio::time::timeout(timeout, all_events.recv()).await {
+    while tokio::time::Instant::now() < deadline && received.len() < expected_min_events {
+        match tokio::time::timeout(per_event_timeout, all_events.recv()).await {
             Ok(Ok(event)) => {
                 assert!(
                     event.id > SqlxLedgerEventId::from(baseline_id),
@@ -179,9 +180,9 @@ async fn after_id_catches_up_on_many_events() -> anyhow::Result<()> {
                     event.id,
                     baseline_id
                 );
-                received.push(event);
-                if received.len() >= expected_min_events {
-                    break;
+                // Only count events belonging to this test's journal
+                if event.journal_id() == journal_id {
+                    received.push(event);
                 }
             }
             Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
@@ -190,7 +191,7 @@ async fn after_id_catches_up_on_many_events() -> anyhow::Result<()> {
             Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
                 panic!("Event subscriber closed unexpectedly");
             }
-            Err(_) => break,
+            Err(_) => {}
         }
     }
 
@@ -328,12 +329,14 @@ async fn concurrent_producers_events_ordered() -> anyhow::Result<()> {
                 .await
                 .unwrap();
             }
+            journal_id
         });
         handles.push(handle);
     }
 
+    let mut producer_journal_ids = std::collections::HashSet::new();
     for handle in handles {
-        handle.await?;
+        producer_journal_ids.insert(handle.await?);
     }
 
     // Each transaction produces 3 events (1 TransactionCreated + 2 BalanceUpdated)
@@ -360,10 +363,11 @@ async fn concurrent_producers_events_ordered() -> anyhow::Result<()> {
     let mut all_events = events.all().expect("subscriber should be open");
 
     let mut received = Vec::new();
-    let timeout = tokio::time::Duration::from_secs(10);
+    let per_event_timeout = tokio::time::Duration::from_millis(500);
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
 
-    loop {
-        match tokio::time::timeout(timeout, all_events.recv()).await {
+    while tokio::time::Instant::now() < deadline && received.len() < expected_events {
+        match tokio::time::timeout(per_event_timeout, all_events.recv()).await {
             Ok(Ok(event)) => {
                 assert!(
                     event.id > SqlxLedgerEventId::from(baseline_id),
@@ -371,9 +375,9 @@ async fn concurrent_producers_events_ordered() -> anyhow::Result<()> {
                     event.id,
                     baseline_id
                 );
-                received.push(event);
-                if received.len() >= expected_events {
-                    break;
+                // Only count events belonging to our producers' journals
+                if producer_journal_ids.contains(&event.journal_id()) {
+                    received.push(event);
                 }
             }
             Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
@@ -382,7 +386,7 @@ async fn concurrent_producers_events_ordered() -> anyhow::Result<()> {
             Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
                 panic!("Subscriber closed");
             }
-            Err(_) => break,
+            Err(_) => {}
         }
     }
 

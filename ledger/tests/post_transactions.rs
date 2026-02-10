@@ -288,13 +288,14 @@ async fn post_transaction() -> anyhow::Result<()> {
         })
         .await?;
     let mut after_all = after_events.all().unwrap();
+    let after_deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
     let after_collected = collect_our_events(
         &mut after_all,
         &external_id,
         sender_account_id,
         recipient_account_id,
         1,
-        deadline,
+        after_deadline,
     )
     .await;
     assert!(

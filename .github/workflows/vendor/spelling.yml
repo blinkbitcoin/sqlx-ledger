@@ -5,7 +5,7 @@ name: Spelling
 
 on:
   pull_request:
-    branches: [main]
+    branches: [ main ]
 
 jobs:
   spelling:
@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Actions Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v3
       - name: Spell Check Repo
         uses: crate-ci/typos@master
         with:

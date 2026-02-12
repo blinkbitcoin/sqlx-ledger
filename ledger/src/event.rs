@@ -248,68 +248,85 @@ pub(crate) async fn subscribe(
     task::spawn(async move {
         let mut num_errors = 0;
         let mut last_id = after_id.unwrap_or(SqlxLedgerEventId(0));
-        loop {
-            if reload {
-                match sqlx::query!(
-                    r#"SELECT json_build_object(
-                      'id', id,
-                      'type', type,
-                      'data', data,
-                      'recorded_at', recorded_at
-                    ) AS "payload!" FROM sqlx_ledger_events WHERE id > $1 ORDER BY id"#,
-                    last_id.0
-                )
-                .fetch_all(&pool)
-                .await
-                {
-                    Ok(rows) => {
-                        num_errors = 0;
-                        for row in rows {
-                            let event: Result<SqlxLedgerEvent, _> =
-                                serde_json::from_value(row.payload);
-                            if sqlx_ledger_notification_received(event, &snd, &mut last_id, true)
+        let cleanup_result = async {
+            loop {
+                if reload {
+                    match sqlx::query!(
+                        r#"SELECT json_build_object(
+                          'id', id,
+                          'type', type,
+                          'data', data,
+                          'recorded_at', recorded_at
+                        ) AS "payload!" FROM sqlx_ledger_events WHERE id > $1 ORDER BY id"#,
+                        last_id.0
+                    )
+                    .fetch_all(&pool)
+                    .await
+                    {
+                        Ok(rows) => {
+                            num_errors = 0;
+                            for row in rows {
+                                let event: Result<SqlxLedgerEvent, _> =
+                                    serde_json::from_value(row.payload);
+                                if sqlx_ledger_notification_received(
+                                    event,
+                                    &snd,
+                                    &mut last_id,
+                                    true,
+                                )
                                 .is_err()
-                            {
-                                closed.store(true, Ordering::SeqCst);
-                                break;
+                                {
+                                    closed.store(true, Ordering::SeqCst);
+                                    return;
+                                }
                             }
                         }
-                    }
-                    Err(e) if num_errors == 0 => {
-                        tracing::error!("Error fetching events: {}", e);
-                        tokio::time::sleep(std::time::Duration::from_secs(1 << num_errors)).await;
-                        num_errors += 1;
-                        continue;
-                    }
-                    _ => {
-                        num_errors = 0;
-                        continue;
-                    }
-                }
-            }
-            if closed.load(Ordering::Relaxed) {
-                break;
-            }
-            while let Ok(notification) = listener.recv().await {
-                let event: Result<SqlxLedgerEvent, _> =
-                    serde_json::from_str(notification.payload());
-                if let Err(e) = &event {
-                    if e.to_string().contains("data field missing") {
-                        reload = true;
-                        break;
+                        Err(e) if num_errors == 0 => {
+                            tracing::error!("Error fetching events: {}", e);
+                            tokio::time::sleep(std::time::Duration::from_secs(1 << num_errors))
+                                .await;
+                            num_errors += 1;
+                            continue;
+                        }
+                        Err(e) => {
+                            tracing::warn!("Error fetching events after retry: {}", e);
+                            num_errors = 0;
+                            continue;
+                        }
                     }
                 }
-                match sqlx_ledger_notification_received(event, &snd, &mut last_id, !reload) {
-                    Ok(false) => break,
-                    Ok(_) => num_errors = 0,
-                    Err(_) => {
-                        closed.store(true, Ordering::SeqCst);
-                    }
+                if closed.load(Ordering::Relaxed) {
+                    return;
                 }
-                reload = true;
+                while let Ok(notification) = listener.recv().await {
+                    let event: Result<SqlxLedgerEvent, _> =
+                        serde_json::from_str(notification.payload());
+                    if let Err(e) = &event {
+                        if e.to_string().contains("data field missing") {
+                            reload = true;
+                            break;
+                        }
+                    }
+                    match sqlx_ledger_notification_received(event, &snd, &mut last_id, !reload) {
+                        Ok(false) => break,
+                        Ok(_) => num_errors = 0,
+                        Err(_) => {
+                            closed.store(true, Ordering::SeqCst);
+                            return;
+                        }
+                    }
+                    reload = true;
+                }
             }
         }
-        let _ = listener.unlisten("sqlx_ledger_events").await;
+        .await;
+
+        // Ensure listener is always cleaned up, even on early exit
+        if let Err(e) = listener.unlisten("sqlx_ledger_events").await {
+            tracing::warn!("Failed to unlisten from sqlx_ledger_events: {}", e);
+        }
+
+        cleanup_result
     });
     Ok(recv)
 }

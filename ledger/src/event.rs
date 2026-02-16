@@ -299,6 +299,7 @@ pub(crate) async fn subscribe(
                 match batch_result {
                     Ok(()) => {
                         num_errors = 0;
+                        reload = false;
                     }
                     Err(SqlxLedgerError::EventSubscriberClosed) => {
                         closed.store(true, Ordering::SeqCst);
@@ -306,14 +307,14 @@ pub(crate) async fn subscribe(
                     }
                     Err(e) => {
                         num_errors += 1;
-                        let delay_secs = 1u64 << num_errors.min(5);
+                        let delay = backoff_delay(num_errors);
                         tracing::error!(
-                            "Error fetching events (attempt {}): {}. Retrying in {}s",
+                            "Error fetching events (attempt {}): {}. Retrying in {:?}",
                             num_errors,
                             e,
-                            delay_secs
+                            delay
                         );
-                        tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+                        tokio::time::sleep(delay).await;
                         continue;
                     }
                 }
@@ -332,16 +333,17 @@ pub(crate) async fn subscribe(
                                 break;
                             }
                         }
-                        match sqlx_ledger_notification_received(event, &snd, &mut last_id, !reload)
-                        {
-                            Ok(false) => break,
+                        match sqlx_ledger_notification_received(event, &snd, &mut last_id, reload) {
+                            Ok(false) => {
+                                reload = true;
+                                break;
+                            }
                             Ok(_) => num_errors = 0,
                             Err(_) => {
                                 closed.store(true, Ordering::SeqCst);
                                 break;
                             }
                         }
-                        reload = true;
                     }
                     Err(e) => {
                         // PgListener::recv() auto-reconnects on connection loss,
@@ -349,14 +351,14 @@ pub(crate) async fn subscribe(
                         // tight spin loop, then trigger a reload to catch up on
                         // any events missed during the reconnection.
                         num_errors += 1;
-                        let delay_secs = 1u64 << num_errors.min(5);
+                        let delay = backoff_delay(num_errors);
                         tracing::warn!(
-                            "PgListener recv error (attempt {}): {}. Retrying in {}s",
+                            "PgListener recv error (attempt {}): {}. Retrying in {:?}",
                             num_errors,
                             e,
-                            delay_secs
+                            delay
                         );
-                        tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+                        tokio::time::sleep(delay).await;
                         reload = true;
                         break;
                     }
@@ -366,6 +368,10 @@ pub(crate) async fn subscribe(
         let _ = listener.unlisten("sqlx_ledger_events").await;
     });
     Ok(recv)
+}
+
+fn backoff_delay(num_errors: u32) -> std::time::Duration {
+    std::time::Duration::from_secs(1u64 << num_errors.min(5))
 }
 
 #[instrument(name = "sqlx_ledger.notification_received", skip(sender), err)]
@@ -612,6 +618,22 @@ mod tests {
             err_msg.contains("data field missing"),
             "Expected 'data field missing' in error: {err_msg}"
         );
+    }
+
+    #[test]
+    fn backoff_delay_caps_at_32_seconds() {
+        use std::time::Duration;
+        // num_errors is incremented before calling backoff_delay, so first
+        // call uses num_errors=1
+        assert_eq!(backoff_delay(1), Duration::from_secs(2));
+        assert_eq!(backoff_delay(2), Duration::from_secs(4));
+        assert_eq!(backoff_delay(3), Duration::from_secs(8));
+        assert_eq!(backoff_delay(4), Duration::from_secs(16));
+        assert_eq!(backoff_delay(5), Duration::from_secs(32));
+        // Cap at 32s for any num_errors >= 5
+        assert_eq!(backoff_delay(6), Duration::from_secs(32));
+        assert_eq!(backoff_delay(10), Duration::from_secs(32));
+        assert_eq!(backoff_delay(100), Duration::from_secs(32));
     }
 }
 

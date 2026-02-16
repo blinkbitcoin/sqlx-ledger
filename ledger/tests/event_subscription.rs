@@ -741,3 +741,67 @@ async fn live_gap_triggers_reload_and_recovers() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn paginated_reload_fetches_multiple_batches() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let (ledger, journal_id, sender_id, recipient_id, tx_code) = setup_ledger(&pool).await?;
+
+    let baseline_id: i64 =
+        sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(id), 0) FROM sqlx_ledger_events")
+            .fetch_one(&pool)
+            .await?;
+
+    let num_transactions = 50;
+    for _ in 0..num_transactions {
+        post_one_transaction(&ledger, &tx_code, journal_id, sender_id, recipient_id).await?;
+    }
+
+    let expected_events = num_transactions * 3;
+
+    let events = ledger
+        .events(EventSubscriberOpts {
+            after_id: Some(SqlxLedgerEventId::from(baseline_id)),
+            buffer: 1000,
+            batch_size: 3,
+            ..Default::default()
+        })
+        .await?;
+    let mut all_events = events.all().expect("subscriber should be open");
+
+    let per_event_timeout = tokio::time::Duration::from_millis(500);
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
+    let mut received = Vec::new();
+
+    while tokio::time::Instant::now() < deadline && received.len() < expected_events {
+        match tokio::time::timeout(per_event_timeout, all_events.recv()).await {
+            Ok(Ok(event)) if event.journal_id() == journal_id => {
+                received.push(event);
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
+                eprintln!("Lagged by {n}");
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                panic!("Subscriber closed unexpectedly");
+            }
+            _ => {}
+        }
+    }
+
+    assert!(
+        received.len() >= expected_events,
+        "Expected at least {expected_events} events across multiple batches (batch_size=3), got {}",
+        received.len()
+    );
+
+    for window in received.windows(2) {
+        assert!(
+            window[0].id < window[1].id,
+            "Events out of order: {:?} >= {:?}",
+            window[0].id,
+            window[1].id
+        );
+    }
+
+    Ok(())
+}

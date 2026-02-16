@@ -30,6 +30,7 @@ pub struct EventSubscriberOpts {
     pub close_on_lag: bool,
     pub buffer: usize,
     pub after_id: Option<SqlxLedgerEventId>,
+    pub batch_size: i64,
 }
 impl Default for EventSubscriberOpts {
     fn default() -> Self {
@@ -37,6 +38,7 @@ impl Default for EventSubscriberOpts {
             close_on_lag: false,
             buffer: 100,
             after_id: None,
+            batch_size: 1000,
         }
     }
 }
@@ -60,10 +62,18 @@ impl EventSubscriber {
             close_on_lag,
             buffer,
             after_id: start_id,
+            batch_size,
         }: EventSubscriberOpts,
     ) -> Result<Self, SqlxLedgerError> {
         let closed = Arc::new(AtomicBool::new(false));
-        let mut incoming = subscribe(pool.clone(), Arc::clone(&closed), buffer, start_id).await?;
+        let mut incoming = subscribe(
+            pool.clone(),
+            Arc::clone(&closed),
+            buffer,
+            start_id,
+            batch_size,
+        )
+        .await?;
         let all = Arc::new(incoming.resubscribe());
         let balance_receivers = Arc::new(RwLock::new(HashMap::<
             (JournalId, AccountId),
@@ -246,6 +256,7 @@ pub(crate) async fn subscribe(
     closed: Arc<AtomicBool>,
     buffer: usize,
     after_id: Option<SqlxLedgerEventId>,
+    batch_size: i64,
 ) -> Result<broadcast::Receiver<SqlxLedgerEvent>, SqlxLedgerError> {
     let mut listener = PgListener::connect_with(&pool).await?;
     listener.listen("sqlx_ledger_events").await?;
@@ -254,7 +265,6 @@ pub(crate) async fn subscribe(
     task::spawn(async move {
         let mut num_errors: u32 = 0;
         let mut last_id = after_id.unwrap_or(SqlxLedgerEventId(0));
-        const RELOAD_BATCH_SIZE: i64 = 1000;
         loop {
             if reload {
                 // Fetch missed events in paginated batches to avoid loading
@@ -269,12 +279,12 @@ pub(crate) async fn subscribe(
                               'recorded_at', recorded_at
                             ) AS "payload!" FROM sqlx_ledger_events WHERE id > $1 ORDER BY id LIMIT $2"#,
                             last_id.0,
-                            RELOAD_BATCH_SIZE
+                            batch_size
                         )
                         .fetch_all(&pool)
                         .await?;
 
-                        let is_last_batch = (rows.len() as i64) < RELOAD_BATCH_SIZE;
+                        let is_last_batch = (rows.len() as i64) < batch_size;
 
                         for row in rows {
                             let event: Result<SqlxLedgerEvent, _> =

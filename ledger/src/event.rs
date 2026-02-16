@@ -30,6 +30,7 @@ pub struct EventSubscriberOpts {
     pub close_on_lag: bool,
     pub buffer: usize,
     pub after_id: Option<SqlxLedgerEventId>,
+    pub batch_size: i64,
 }
 impl Default for EventSubscriberOpts {
     fn default() -> Self {
@@ -37,6 +38,7 @@ impl Default for EventSubscriberOpts {
             close_on_lag: false,
             buffer: 100,
             after_id: None,
+            batch_size: 1000,
         }
     }
 }
@@ -60,10 +62,18 @@ impl EventSubscriber {
             close_on_lag,
             buffer,
             after_id: start_id,
+            batch_size,
         }: EventSubscriberOpts,
     ) -> Result<Self, SqlxLedgerError> {
         let closed = Arc::new(AtomicBool::new(false));
-        let mut incoming = subscribe(pool.clone(), Arc::clone(&closed), buffer, start_id).await?;
+        let mut incoming = subscribe(
+            pool.clone(),
+            Arc::clone(&closed),
+            buffer,
+            start_id,
+            batch_size,
+        )
+        .await?;
         let all = Arc::new(incoming.resubscribe());
         let balance_receivers = Arc::new(RwLock::new(HashMap::<
             (JournalId, AccountId),
@@ -246,49 +256,75 @@ pub(crate) async fn subscribe(
     closed: Arc<AtomicBool>,
     buffer: usize,
     after_id: Option<SqlxLedgerEventId>,
+    batch_size: i64,
 ) -> Result<broadcast::Receiver<SqlxLedgerEvent>, SqlxLedgerError> {
     let mut listener = PgListener::connect_with(&pool).await?;
     listener.listen("sqlx_ledger_events").await?;
     let (snd, recv) = broadcast::channel(buffer);
     let mut reload = after_id.is_some();
     task::spawn(async move {
-        let mut num_errors = 0;
+        let mut num_errors: u32 = 0;
         let mut last_id = after_id.unwrap_or(SqlxLedgerEventId(0));
         loop {
             if reload {
-                match sqlx::query!(
-                    r#"SELECT json_build_object(
-                      'id', id,
-                      'type', type,
-                      'data', data,
-                      'recorded_at', recorded_at
-                    ) AS "payload!" FROM sqlx_ledger_events WHERE id > $1 ORDER BY id"#,
-                    last_id.0
-                )
-                .fetch_all(&pool)
-                .await
-                {
-                    Ok(rows) => {
-                        num_errors = 0;
+                // Fetch missed events in paginated batches to avoid loading
+                // the entire event history into memory at once.
+                let batch_result = async {
+                    loop {
+                        let rows = sqlx::query!(
+                            r#"SELECT json_build_object(
+                              'id', id,
+                              'type', type,
+                              'data', data,
+                              'recorded_at', recorded_at
+                            ) AS "payload!" FROM sqlx_ledger_events WHERE id > $1 ORDER BY id LIMIT $2"#,
+                            last_id.0,
+                            batch_size
+                        )
+                        .fetch_all(&pool)
+                        .await?;
+
+                        let is_last_batch = (rows.len() as i64) < batch_size;
+
                         for row in rows {
                             let event: Result<SqlxLedgerEvent, _> =
                                 serde_json::from_value(row.payload);
                             if sqlx_ledger_notification_received(event, &snd, &mut last_id, true)
                                 .is_err()
                             {
-                                closed.store(true, Ordering::SeqCst);
-                                break;
+                                return Err::<(), SqlxLedgerError>(
+                                    SqlxLedgerError::EventSubscriberClosed,
+                                );
                             }
                         }
+
+                        if is_last_batch {
+                            break;
+                        }
                     }
-                    Err(e) if num_errors == 0 => {
-                        tracing::error!("Error fetching events: {}", e);
-                        tokio::time::sleep(std::time::Duration::from_secs(1 << num_errors)).await;
-                        num_errors += 1;
-                        continue;
-                    }
-                    _ => {
+                    Ok(())
+                }
+                .await;
+
+                match batch_result {
+                    Ok(()) => {
                         num_errors = 0;
+                        reload = false;
+                    }
+                    Err(SqlxLedgerError::EventSubscriberClosed) => {
+                        closed.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                    Err(e) => {
+                        num_errors += 1;
+                        let delay = backoff_delay(num_errors);
+                        tracing::error!(
+                            "Error fetching events (attempt {}): {}. Retrying in {:?}",
+                            num_errors,
+                            e,
+                            delay
+                        );
+                        tokio::time::sleep(delay).await;
                         continue;
                     }
                 }
@@ -296,28 +332,56 @@ pub(crate) async fn subscribe(
             if closed.load(Ordering::Relaxed) {
                 break;
             }
-            while let Ok(notification) = listener.recv().await {
-                let event: Result<SqlxLedgerEvent, _> =
-                    serde_json::from_str(notification.payload());
-                if let Err(e) = &event {
-                    if e.to_string().contains("data field missing") {
+            loop {
+                match listener.recv().await {
+                    Ok(notification) => {
+                        let event: Result<SqlxLedgerEvent, _> =
+                            serde_json::from_str(notification.payload());
+                        if let Err(e) = &event {
+                            if e.to_string().contains("data field missing") {
+                                reload = true;
+                                break;
+                            }
+                        }
+                        match sqlx_ledger_notification_received(event, &snd, &mut last_id, reload) {
+                            Ok(false) => {
+                                reload = true;
+                                break;
+                            }
+                            Ok(_) => num_errors = 0,
+                            Err(_) => {
+                                closed.store(true, Ordering::SeqCst);
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // PgListener::recv() auto-reconnects on connection loss,
+                        // but still surfaces errors. Log and backoff to avoid a
+                        // tight spin loop, then trigger a reload to catch up on
+                        // any events missed during the reconnection.
+                        num_errors += 1;
+                        let delay = backoff_delay(num_errors);
+                        tracing::warn!(
+                            "PgListener recv error (attempt {}): {}. Retrying in {:?}",
+                            num_errors,
+                            e,
+                            delay
+                        );
+                        tokio::time::sleep(delay).await;
                         reload = true;
                         break;
                     }
                 }
-                match sqlx_ledger_notification_received(event, &snd, &mut last_id, !reload) {
-                    Ok(false) => break,
-                    Ok(_) => num_errors = 0,
-                    Err(_) => {
-                        closed.store(true, Ordering::SeqCst);
-                    }
-                }
-                reload = true;
             }
         }
         let _ = listener.unlisten("sqlx_ledger_events").await;
     });
     Ok(recv)
+}
+
+fn backoff_delay(num_errors: u32) -> std::time::Duration {
+    std::time::Duration::from_secs(1u64 << num_errors.min(5))
 }
 
 #[instrument(name = "sqlx_ledger.notification_received", skip(sender), err)]
@@ -564,6 +628,22 @@ mod tests {
             err_msg.contains("data field missing"),
             "Expected 'data field missing' in error: {err_msg}"
         );
+    }
+
+    #[test]
+    fn backoff_delay_caps_at_32_seconds() {
+        use std::time::Duration;
+        // num_errors is incremented before calling backoff_delay, so first
+        // call uses num_errors=1
+        assert_eq!(backoff_delay(1), Duration::from_secs(2));
+        assert_eq!(backoff_delay(2), Duration::from_secs(4));
+        assert_eq!(backoff_delay(3), Duration::from_secs(8));
+        assert_eq!(backoff_delay(4), Duration::from_secs(16));
+        assert_eq!(backoff_delay(5), Duration::from_secs(32));
+        // Cap at 32s for any num_errors >= 5
+        assert_eq!(backoff_delay(6), Duration::from_secs(32));
+        assert_eq!(backoff_delay(10), Duration::from_secs(32));
+        assert_eq!(backoff_delay(100), Duration::from_secs(32));
     }
 }
 

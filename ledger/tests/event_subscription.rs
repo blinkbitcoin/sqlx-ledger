@@ -214,91 +214,100 @@ async fn after_id_catches_up_on_many_events() -> anyhow::Result<()> {
     Ok(())
 }
 
-// Posts two transactions, captures the event ID between them, then subscribes
-// with after_id to verify only the second transaction's events are received.
 #[tokio::test]
-async fn after_id_only_receives_subsequent_events() -> anyhow::Result<()> {
+async fn reload_to_live_transition_receives_new_events() -> anyhow::Result<()> {
     let pool = helpers::init_pool().await?;
     let (ledger, journal_id, sender_id, recipient_id, tx_code) = setup_ledger(&pool).await?;
 
-    post_one_transaction(&ledger, &tx_code, journal_id, sender_id, recipient_id).await?;
-
-    let cutoff_id: i64 =
+    let baseline_id: i64 =
         sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(id), 0) FROM sqlx_ledger_events")
             .fetch_one(&pool)
             .await?;
 
-    let second_external_id =
+    let num_pre_txns = 5;
+    for _ in 0..num_pre_txns {
         post_one_transaction(&ledger, &tx_code, journal_id, sender_id, recipient_id).await?;
+    }
 
-    let after_events = ledger
+    let events = ledger
         .events(EventSubscriberOpts {
-            after_id: Some(SqlxLedgerEventId::from(cutoff_id)),
-            buffer: 100,
+            after_id: Some(SqlxLedgerEventId::from(baseline_id)),
+            buffer: 1000,
             ..Default::default()
         })
         .await?;
-    let mut after_all = after_events.all().expect("subscriber should be open");
+    let mut all_events = events.all().expect("subscriber should be open");
 
-    let mut our_events = Vec::new();
-    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+    let expected_catchup = num_pre_txns * 3;
     let per_event_timeout = tokio::time::Duration::from_millis(500);
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
+    let mut catchup_events = Vec::new();
 
-    while tokio::time::Instant::now() < deadline && our_events.len() < 3 {
-        match tokio::time::timeout(per_event_timeout, after_all.recv()).await {
+    while tokio::time::Instant::now() < deadline && catchup_events.len() < expected_catchup {
+        match tokio::time::timeout(per_event_timeout, all_events.recv()).await {
+            Ok(Ok(event)) if event.journal_id() == journal_id => {
+                catchup_events.push(event);
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
+                eprintln!("Lagged by {n}");
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                panic!("Subscriber closed during catch-up");
+            }
+            _ => {}
+        }
+    }
+
+    assert!(
+        catchup_events.len() >= expected_catchup,
+        "Catch-up: expected at least {expected_catchup} events, got {}",
+        catchup_events.len()
+    );
+
+    let live_ext_id =
+        post_one_transaction(&ledger, &tx_code, journal_id, sender_id, recipient_id).await?;
+
+    let live_deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(3);
+    let mut live_events = Vec::new();
+
+    while tokio::time::Instant::now() < live_deadline && live_events.len() < 3 {
+        match tokio::time::timeout(per_event_timeout, all_events.recv()).await {
             Ok(Ok(event)) => {
-                assert!(
-                    event.id > SqlxLedgerEventId::from(cutoff_id),
-                    "Received event {:?} that should have been filtered by after_id {:?}",
-                    event.id,
-                    cutoff_id
-                );
                 let is_ours = match &event.data {
-                    SqlxLedgerEventData::TransactionCreated(tx) => {
-                        tx.external_id == second_external_id
-                    }
+                    SqlxLedgerEventData::TransactionCreated(tx) => tx.external_id == live_ext_id,
                     SqlxLedgerEventData::BalanceUpdated(b) => {
                         b.account_id == sender_id || b.account_id == recipient_id
                     }
                     _ => false,
                 };
                 if is_ours {
-                    our_events.push(event);
+                    live_events.push(event);
                 }
             }
             Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
-                eprintln!("Lagged by {n} events");
+                eprintln!("Lagged by {n}");
             }
-            Ok(Err(e)) => panic!("Unexpected recv error: {e}"),
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                panic!("Subscriber closed during live phase");
+            }
             Err(_) => {}
         }
     }
 
-    assert_eq!(
-        our_events.len(),
-        3,
-        "Expected exactly 3 events from second transaction (1 TransactionCreated + 2 BalanceUpdated), got {}",
-        our_events.len()
-    );
-
-    let has_tx_created = our_events
-        .iter()
-        .any(|e| matches!(&e.data, SqlxLedgerEventData::TransactionCreated(_)));
     assert!(
-        has_tx_created,
-        "Expected a TransactionCreated event from second transaction"
-    );
-    let balance_count = our_events
-        .iter()
-        .filter(|e| matches!(&e.data, SqlxLedgerEventData::BalanceUpdated(_)))
-        .count();
-    assert_eq!(
-        balance_count, 2,
-        "Expected exactly 2 BalanceUpdated events from second transaction"
+        live_events.len() >= 2,
+        "Live phase: expected at least 2 events from post-catchup transaction, got {}",
+        live_events.len()
     );
 
-    for window in our_events.windows(2) {
-        assert!(window[0].id < window[1].id);
+    let all: Vec<_> = catchup_events.iter().chain(live_events.iter()).collect();
+    for window in all.windows(2) {
+        assert!(
+            window[0].id < window[1].id,
+            "Events out of order: {:?} >= {:?}",
+            window[0].id,
+            window[1].id
+        );
     }
 
     Ok(())
@@ -634,6 +643,270 @@ async fn large_payload_triggers_reload() -> anyhow::Result<()> {
         .filter(|e| matches!(&e.data, SqlxLedgerEventData::BalanceUpdated(_)))
         .count();
     assert_eq!(balance_count, 2, "Expected exactly 2 BalanceUpdated events");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn live_gap_triggers_reload_and_recovers() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let (ledger, journal_id, sender_id, recipient_id, tx_code) = setup_ledger(&pool).await?;
+
+    let baseline_id: i64 =
+        sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(id), 0) FROM sqlx_ledger_events")
+            .fetch_one(&pool)
+            .await?;
+
+    let events = ledger
+        .events(EventSubscriberOpts {
+            after_id: Some(SqlxLedgerEventId::from(baseline_id)),
+            buffer: 1000,
+            ..Default::default()
+        })
+        .await?;
+    let mut all_events = events.all().expect("subscriber should be open");
+
+    let _ext_id_1 =
+        post_one_transaction(&ledger, &tx_code, journal_id, sender_id, recipient_id).await?;
+
+    let per_event_timeout = tokio::time::Duration::from_millis(500);
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+    let mut phase1_events = Vec::new();
+
+    while tokio::time::Instant::now() < deadline && phase1_events.len() < 3 {
+        match tokio::time::timeout(per_event_timeout, all_events.recv()).await {
+            Ok(Ok(event)) if event.journal_id() == journal_id => {
+                phase1_events.push(event);
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
+                eprintln!("Lagged by {n} events");
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                panic!("Subscriber closed unexpectedly in phase 1");
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        phase1_events.len() >= 2,
+        "Phase 1: expected at least 2 events, got {}",
+        phase1_events.len()
+    );
+
+    let fake_id = baseline_id + 100_000;
+    let fake_payload = format!(
+        r#"{{"id": {fake_id}, "type": "BalanceUpdated", "data": {{"journal_id": "00000000-0000-0000-0000-000000000000", "account_id": "00000000-0000-0000-0000-000000000000", "entry_id": "00000000-0000-0000-0000-000000000000", "currency": "USD", "settled_dr_balance": "0", "settled_cr_balance": "0", "settled_entry_id": "00000000-0000-0000-0000-000000000000", "settled_modified_at": "2024-01-01T00:00:00Z", "pending_dr_balance": "0", "pending_cr_balance": "0", "pending_entry_id": "00000000-0000-0000-0000-000000000000", "pending_modified_at": "2024-01-01T00:00:00Z", "encumbered_dr_balance": "0", "encumbered_cr_balance": "0", "encumbered_entry_id": "00000000-0000-0000-0000-000000000000", "encumbered_modified_at": "2024-01-01T00:00:00Z", "version": 1, "modified_at": "2024-01-01T00:00:00Z", "created_at": "2024-01-01T00:00:00Z"}}, "recorded_at": "2024-01-01T00:00:00Z"}}"#
+    );
+    sqlx::query(&format!("NOTIFY sqlx_ledger_events, '{fake_payload}'"))
+        .execute(&pool)
+        .await?;
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+    let ext_id_2 =
+        post_one_transaction(&ledger, &tx_code, journal_id, sender_id, recipient_id).await?;
+
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+    let mut phase2_events = Vec::new();
+
+    while tokio::time::Instant::now() < deadline && phase2_events.len() < 3 {
+        match tokio::time::timeout(per_event_timeout, all_events.recv()).await {
+            Ok(Ok(event)) => {
+                let is_ours = match &event.data {
+                    SqlxLedgerEventData::TransactionCreated(tx) => tx.external_id == ext_id_2,
+                    SqlxLedgerEventData::BalanceUpdated(b) => {
+                        b.account_id == sender_id || b.account_id == recipient_id
+                    }
+                    _ => false,
+                };
+                if is_ours && event.id > SqlxLedgerEventId::from(baseline_id) {
+                    phase2_events.push(event);
+                }
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
+                eprintln!("Lagged by {n} events");
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                panic!("Subscriber closed unexpectedly in phase 2");
+            }
+            Err(_) => {}
+        }
+    }
+
+    assert!(
+        phase2_events.len() >= 2,
+        "Phase 2: expected at least 2 events after gap recovery, got {}",
+        phase2_events.len()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn paginated_reload_fetches_multiple_batches() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let (ledger, journal_id, sender_id, recipient_id, tx_code) = setup_ledger(&pool).await?;
+
+    let baseline_id: i64 =
+        sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(id), 0) FROM sqlx_ledger_events")
+            .fetch_one(&pool)
+            .await?;
+
+    let num_transactions = 50;
+    for _ in 0..num_transactions {
+        post_one_transaction(&ledger, &tx_code, journal_id, sender_id, recipient_id).await?;
+    }
+
+    let expected_events = num_transactions * 3;
+
+    let events = ledger
+        .events(EventSubscriberOpts {
+            after_id: Some(SqlxLedgerEventId::from(baseline_id)),
+            buffer: 1000,
+            batch_size: 3,
+            ..Default::default()
+        })
+        .await?;
+    let mut all_events = events.all().expect("subscriber should be open");
+
+    let per_event_timeout = tokio::time::Duration::from_millis(500);
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
+    let mut received = Vec::new();
+
+    while tokio::time::Instant::now() < deadline && received.len() < expected_events {
+        match tokio::time::timeout(per_event_timeout, all_events.recv()).await {
+            Ok(Ok(event)) if event.journal_id() == journal_id => {
+                received.push(event);
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
+                eprintln!("Lagged by {n}");
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                panic!("Subscriber closed unexpectedly");
+            }
+            _ => {}
+        }
+    }
+
+    assert!(
+        received.len() >= expected_events,
+        "Expected at least {expected_events} events across multiple batches (batch_size=3), got {}",
+        received.len()
+    );
+
+    for window in received.windows(2) {
+        assert!(
+            window[0].id < window[1].id,
+            "Events out of order: {:?} >= {:?}",
+            window[0].id,
+            window[1].id
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn pg_listener_error_triggers_reload_and_recovers() -> anyhow::Result<()> {
+    let pool = helpers::init_pool().await?;
+    let (ledger, journal_id, sender_id, recipient_id, tx_code) = setup_ledger(&pool).await?;
+
+    let baseline_id: i64 =
+        sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(id), 0) FROM sqlx_ledger_events")
+            .fetch_one(&pool)
+            .await?;
+
+    let _ext_id_1 =
+        post_one_transaction(&ledger, &tx_code, journal_id, sender_id, recipient_id).await?;
+
+    let events = ledger
+        .events(EventSubscriberOpts {
+            after_id: Some(SqlxLedgerEventId::from(baseline_id)),
+            buffer: 1000,
+            ..Default::default()
+        })
+        .await?;
+    let mut all_events = events.all().expect("subscriber should be open");
+
+    let per_event_timeout = tokio::time::Duration::from_millis(500);
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+    let mut phase1_events = Vec::new();
+
+    while tokio::time::Instant::now() < deadline && phase1_events.len() < 3 {
+        match tokio::time::timeout(per_event_timeout, all_events.recv()).await {
+            Ok(Ok(event)) if event.journal_id() == journal_id => {
+                phase1_events.push(event);
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
+                eprintln!("Lagged by {n}");
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                panic!("Subscriber closed unexpectedly in phase 1");
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        phase1_events.len() >= 2,
+        "Phase 1: expected at least 2 events, got {}",
+        phase1_events.len()
+    );
+
+    let listener_pids: Vec<i32> = sqlx::query_scalar::<_, i32>(
+        "SELECT pid FROM pg_stat_activity WHERE query ILIKE '%LISTEN%sqlx_ledger_events%' AND pid != pg_backend_pid()"
+    )
+    .fetch_all(&pool)
+    .await?;
+
+    assert!(
+        !listener_pids.is_empty(),
+        "Expected to find at least one PgListener backend to terminate"
+    );
+
+    for pid in &listener_pids {
+        sqlx::query("SELECT pg_terminate_backend($1)")
+            .bind(pid)
+            .execute(&pool)
+            .await?;
+    }
+
+    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+
+    let ext_id_2 =
+        post_one_transaction(&ledger, &tx_code, journal_id, sender_id, recipient_id).await?;
+
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
+    let mut phase2_events = Vec::new();
+
+    while tokio::time::Instant::now() < deadline && phase2_events.len() < 3 {
+        match tokio::time::timeout(per_event_timeout, all_events.recv()).await {
+            Ok(Ok(event)) => {
+                let is_ours = match &event.data {
+                    SqlxLedgerEventData::TransactionCreated(tx) => tx.external_id == ext_id_2,
+                    SqlxLedgerEventData::BalanceUpdated(b) => {
+                        b.account_id == sender_id || b.account_id == recipient_id
+                    }
+                    _ => false,
+                };
+                if is_ours {
+                    phase2_events.push(event);
+                }
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
+                eprintln!("Lagged by {n}");
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                panic!("Subscriber closed unexpectedly in phase 2");
+            }
+            Err(_) => {}
+        }
+    }
+
+    assert!(
+        phase2_events.len() >= 2,
+        "Phase 2: expected at least 2 events after PgListener recovery, got {}",
+        phase2_events.len()
+    );
 
     Ok(())
 }

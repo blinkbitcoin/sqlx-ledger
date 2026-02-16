@@ -274,20 +274,27 @@ async fn after_id_only_receives_subsequent_events() -> anyhow::Result<()> {
         }
     }
 
-    assert!(
-        our_events.len() >= 2,
-        "Expected at least 2 events from second transaction, got {}",
+    assert_eq!(
+        our_events.len(),
+        3,
+        "Expected exactly 3 events from second transaction (1 TransactionCreated + 2 BalanceUpdated), got {}",
         our_events.len()
     );
 
-    let has_balance_updates = our_events
+    let has_tx_created = our_events
+        .iter()
+        .any(|e| matches!(&e.data, SqlxLedgerEventData::TransactionCreated(_)));
+    assert!(
+        has_tx_created,
+        "Expected a TransactionCreated event from second transaction"
+    );
+    let balance_count = our_events
         .iter()
         .filter(|e| matches!(&e.data, SqlxLedgerEventData::BalanceUpdated(_)))
-        .count()
-        >= 2;
-    assert!(
-        has_balance_updates,
-        "Expected at least 2 BalanceUpdated events from second transaction"
+        .count();
+    assert_eq!(
+        balance_count, 2,
+        "Expected exactly 2 BalanceUpdated events from second transaction"
     );
 
     for window in our_events.windows(2) {
@@ -606,6 +613,10 @@ async fn large_payload_triggers_reload() -> anyhow::Result<()> {
         }
     }
 
+    // TransactionCreated can be lost due to the resubscribe() gap: events fetched
+    // during catch-up may be sent into the broadcast channel before the user's
+    // receiver is created via all() -> resubscribe(). TransactionCreated is the
+    // first event and most likely to fall into this window under concurrent load.
     assert!(
         our_events.len() >= 2,
         "Expected at least 2 events from large-payload transaction, got {}. \
@@ -618,15 +629,13 @@ async fn large_payload_triggers_reload() -> anyhow::Result<()> {
             .collect::<Vec<_>>()
     );
 
-    // TransactionCreated may be lost to broadcast lag; verify BalanceUpdated events
-    let types: Vec<_> = our_events.iter().map(|e| &e.r#type).collect();
-    assert!(
-        types
-            .iter()
-            .filter(|t| ***t == SqlxLedgerEventType::BalanceUpdated)
-            .count()
-            >= 2,
-        "Expected at least 2 BalanceUpdated events"
+    let balance_count = our_events
+        .iter()
+        .filter(|e| matches!(&e.data, SqlxLedgerEventData::BalanceUpdated(_)))
+        .count();
+    assert_eq!(
+        balance_count, 2,
+        "Expected exactly 2 BalanceUpdated events"
     );
 
     Ok(())

@@ -263,9 +263,9 @@ async fn post_transaction() -> anyhow::Result<()> {
         journal_tx_count, 1,
         "Journal channel should have 1 TransactionCreated"
     );
-    assert!(
-        journal_balance_count >= 2,
-        "Journal channel should have at least 2 BalanceUpdated, got {journal_balance_count}"
+    assert_eq!(
+        journal_balance_count, 4,
+        "Journal channel should have exactly 4 BalanceUpdated (2 accounts × 2 currencies), got {journal_balance_count}"
     );
 
     // Verify events are in strictly increasing ID order
@@ -294,18 +294,24 @@ async fn post_transaction() -> anyhow::Result<()> {
         &external_id,
         sender_account_id,
         recipient_account_id,
-        1,
+        4,
         after_deadline,
     )
     .await;
-    assert!(
-        !after_collected.is_empty(),
-        "after_id subscription should receive events after TransactionCreated"
-    );
+    let after_balance_count = after_collected
+        .iter()
+        .filter(|e| e.r#type == SqlxLedgerEventType::BalanceUpdated)
+        .count();
     assert_eq!(
-        after_collected[0].r#type,
-        SqlxLedgerEventType::BalanceUpdated,
-        "First event after TransactionCreated should be BalanceUpdated"
+        after_balance_count, 4,
+        "after_id subscription should receive exactly 4 BalanceUpdated events \
+         (2 accounts × 2 currencies), got {after_balance_count}"
+    );
+    assert!(
+        after_collected
+            .iter()
+            .all(|e| e.r#type == SqlxLedgerEventType::BalanceUpdated),
+        "All events after TransactionCreated should be BalanceUpdated"
     );
 
     let usd = rusty_money::iso::find("USD").unwrap();

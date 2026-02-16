@@ -338,6 +338,7 @@ pub(crate) async fn subscribe(
                             Ok(_) => num_errors = 0,
                             Err(_) => {
                                 closed.store(true, Ordering::SeqCst);
+                                break;
                             }
                         }
                         reload = true;

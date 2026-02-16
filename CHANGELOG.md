@@ -1,3 +1,14 @@
+# [sqlx-ledger release v0.11.13](https://github.com/GaloyMoney/sqlx-ledger/releases/tag/v0.11.13)
+
+
+### Bug Fixes
+
+- Improve subscribe() reliability and error handling (#112)
+
+### Testing
+
+- Add event subscription unit and integration tests (#111)
+
 # [sqlx-ledger release v0.11.12](https://github.com/GaloyMoney/sqlx-ledger/releases/tag/v0.11.12)
 
 

@@ -633,10 +633,7 @@ async fn large_payload_triggers_reload() -> anyhow::Result<()> {
         .iter()
         .filter(|e| matches!(&e.data, SqlxLedgerEventData::BalanceUpdated(_)))
         .count();
-    assert_eq!(
-        balance_count, 2,
-        "Expected exactly 2 BalanceUpdated events"
-    );
+    assert_eq!(balance_count, 2, "Expected exactly 2 BalanceUpdated events");
 
     Ok(())
 }

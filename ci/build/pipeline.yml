@@ -29,7 +29,7 @@ jobs:
       - path: cargo-home
       - path: cargo-target-dir
       run:
-        path: pipeline-tasks/ci/vendor/tasks/rust-check-code.sh
+        path: pipeline-tasks/ci/tasks/check-code.sh
   on_failure:
     put: slack
     params:

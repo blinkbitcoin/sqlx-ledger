@@ -697,9 +697,11 @@ async fn live_gap_triggers_reload_and_recovers() -> anyhow::Result<()> {
     let fake_payload = format!(
         r#"{{"id": {fake_id}, "type": "BalanceUpdated", "data": {{"journal_id": "00000000-0000-0000-0000-000000000000", "account_id": "00000000-0000-0000-0000-000000000000", "entry_id": "00000000-0000-0000-0000-000000000000", "currency": "USD", "settled_dr_balance": "0", "settled_cr_balance": "0", "settled_entry_id": "00000000-0000-0000-0000-000000000000", "settled_modified_at": "2024-01-01T00:00:00Z", "pending_dr_balance": "0", "pending_cr_balance": "0", "pending_entry_id": "00000000-0000-0000-0000-000000000000", "pending_modified_at": "2024-01-01T00:00:00Z", "encumbered_dr_balance": "0", "encumbered_cr_balance": "0", "encumbered_entry_id": "00000000-0000-0000-0000-000000000000", "encumbered_modified_at": "2024-01-01T00:00:00Z", "version": 1, "modified_at": "2024-01-01T00:00:00Z", "created_at": "2024-01-01T00:00:00Z"}}, "recorded_at": "2024-01-01T00:00:00Z"}}"#
     );
-    sqlx::query(&format!("NOTIFY sqlx_ledger_events, '{fake_payload}'"))
-        .execute(&pool)
-        .await?;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "NOTIFY sqlx_ledger_events, '{fake_payload}'"
+    )))
+    .execute(&pool)
+    .await?;
 
     tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 

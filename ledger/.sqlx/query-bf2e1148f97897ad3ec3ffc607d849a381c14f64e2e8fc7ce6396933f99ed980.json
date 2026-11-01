@@ -16,102 +16,222 @@
               ]
             }
           }
+        },
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_accounts",
+            "name": "normal_balance_type"
+          }
         }
       },
       {
         "ordinal": 1,
         "name": "journal_id",
-        "type_info": "Uuid"
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_balances",
+            "name": "journal_id"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "account_id",
-        "type_info": "Uuid"
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_balances",
+            "name": "account_id"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "entry_id",
-        "type_info": "Uuid"
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_balances",
+            "name": "entry_id"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "currency",
-        "type_info": "Varchar"
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_balances",
+            "name": "currency"
+          }
+        }
       },
       {
         "ordinal": 5,
         "name": "settled_dr_balance",
-        "type_info": "Numeric"
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_balances",
+            "name": "settled_dr_balance"
+          }
+        }
       },
       {
         "ordinal": 6,
         "name": "settled_cr_balance",
-        "type_info": "Numeric"
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_balances",
+            "name": "settled_cr_balance"
+          }
+        }
       },
       {
         "ordinal": 7,
         "name": "settled_entry_id",
-        "type_info": "Uuid"
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_balances",
+            "name": "settled_entry_id"
+          }
+        }
       },
       {
         "ordinal": 8,
         "name": "settled_modified_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_balances",
+            "name": "settled_modified_at"
+          }
+        }
       },
       {
         "ordinal": 9,
         "name": "pending_dr_balance",
-        "type_info": "Numeric"
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_balances",
+            "name": "pending_dr_balance"
+          }
+        }
       },
       {
         "ordinal": 10,
         "name": "pending_cr_balance",
-        "type_info": "Numeric"
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_balances",
+            "name": "pending_cr_balance"
+          }
+        }
       },
       {
         "ordinal": 11,
         "name": "pending_entry_id",
-        "type_info": "Uuid"
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_balances",
+            "name": "pending_entry_id"
+          }
+        }
       },
       {
         "ordinal": 12,
         "name": "pending_modified_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_balances",
+            "name": "pending_modified_at"
+          }
+        }
       },
       {
         "ordinal": 13,
         "name": "encumbered_dr_balance",
-        "type_info": "Numeric"
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_balances",
+            "name": "encumbered_dr_balance"
+          }
+        }
       },
       {
         "ordinal": 14,
         "name": "encumbered_cr_balance",
-        "type_info": "Numeric"
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_balances",
+            "name": "encumbered_cr_balance"
+          }
+        }
       },
       {
         "ordinal": 15,
         "name": "encumbered_entry_id",
-        "type_info": "Uuid"
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_balances",
+            "name": "encumbered_entry_id"
+          }
+        }
       },
       {
         "ordinal": 16,
         "name": "encumbered_modified_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_balances",
+            "name": "encumbered_modified_at"
+          }
+        }
       },
       {
         "ordinal": 17,
         "name": "version",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_current_balances",
+            "name": "version"
+          }
+        }
       },
       {
         "ordinal": 18,
         "name": "modified_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_balances",
+            "name": "modified_at"
+          }
+        }
       },
       {
         "ordinal": 19,
         "name": "created_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_balances",
+            "name": "created_at"
+          }
+        }
       }
     ],
     "parameters": {

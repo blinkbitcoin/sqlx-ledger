@@ -6,32 +6,68 @@
       {
         "ordinal": 0,
         "name": "id",
-        "type_info": "Uuid"
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_entries",
+            "name": "id"
+          }
+        }
       },
       {
         "ordinal": 1,
         "name": "version",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_entries",
+            "name": "version"
+          }
+        }
       },
       {
         "ordinal": 2,
         "name": "transaction_id",
-        "type_info": "Uuid"
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_entries",
+            "name": "transaction_id"
+          }
+        }
       },
       {
         "ordinal": 3,
         "name": "account_id",
-        "type_info": "Uuid"
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_entries",
+            "name": "account_id"
+          }
+        }
       },
       {
         "ordinal": 4,
         "name": "journal_id",
-        "type_info": "Uuid"
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_entries",
+            "name": "journal_id"
+          }
+        }
       },
       {
         "ordinal": 5,
         "name": "entry_type",
-        "type_info": "Varchar"
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_entries",
+            "name": "entry_type"
+          }
+        }
       },
       {
         "ordinal": 6,
@@ -47,17 +83,35 @@
               ]
             }
           }
+        },
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_entries",
+            "name": "layer"
+          }
         }
       },
       {
         "ordinal": 7,
         "name": "units",
-        "type_info": "Numeric"
+        "type_info": "Numeric",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_entries",
+            "name": "units"
+          }
+        }
       },
       {
         "ordinal": 8,
         "name": "currency",
-        "type_info": "Varchar"
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_entries",
+            "name": "currency"
+          }
+        }
       },
       {
         "ordinal": 9,
@@ -72,27 +126,57 @@
               ]
             }
           }
+        },
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_entries",
+            "name": "direction"
+          }
         }
       },
       {
         "ordinal": 10,
         "name": "sequence",
-        "type_info": "Int4"
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_entries",
+            "name": "sequence"
+          }
+        }
       },
       {
         "ordinal": 11,
         "name": "description",
-        "type_info": "Varchar"
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_entries",
+            "name": "description"
+          }
+        }
       },
       {
         "ordinal": 12,
         "name": "created_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_entries",
+            "name": "created_at"
+          }
+        }
       },
       {
         "ordinal": 13,
         "name": "modified_at",
-        "type_info": "Timestamptz"
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "sqlx_ledger_entries",
+            "name": "modified_at"
+          }
+        }
       }
     ],
     "parameters": {

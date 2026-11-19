@@ -8,8 +8,9 @@ directories:
   path: ../.github/workflows/vendor
 - contents:
   - git:
-      commitTitle: 'chore: add webhook config'
-      sha: 9d0f008e41df2f5d5e0461171c02fc0c4aee1d6f
+      commitTitle: 'feat(ci): add site SSH Docker-host transport to the Docker-host
+        fragments (#53)'
+      sha: 8d57537df5b5886176f42063cbcc2b4bf475259c
     path: .
   path: ./vendor
 kind: LockConfig

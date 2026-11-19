@@ -40,17 +40,18 @@ jobs:
 - name: integration-tests
   serial: true
   plan:
-  - put: docker-host
-    params:
-      acquire: true
   - in_parallel:
     - get: repo
       trigger: true
     - get: pipeline-tasks
+  - put: docker-host-site1
+    params:
+      acquire: true
   - task: integration-tests
-    timeout: 12m
-    tags:
-    - galoy-staging
+    attempts: 1
+    timeout: 45m
+    input_mapping:
+      docker-host: docker-host-site1
     config:
       platform: linux
       image_resource:
@@ -64,22 +65,44 @@ jobs:
       - name: docker-host
       - name: repo
         path: sqlx-ledger-integration-tests
-      caches:
-      - path: cargo-home
-      - path: cargo-target-dir
+      outputs:
+      - name: host-cleanup
       params:
+        SSH_HOST_MODE: compose
+        TEST_CONTAINER: integration-tests
+        JEST_TIMEOUT: 90000
+        PARAMS_KEYS: ""
         REPO_PATH: sqlx-ledger-integration-tests
         GOOGLE_CREDENTIALS: ((staging-gcp-creds.creds_json))
         SSH_PRIVATE_KEY: ((staging-ssh.ssh_private_key))
-        SSH_PUB_KEY: ((staging-ssh.ssh_public_key))
-        TEST_CONTAINER: integration-tests
-        JEST_TIMEOUT: 90000
+        WORKLOAD_TIMEOUT_MINUTES: "20"
       run:
-        path: pipeline-tasks/ci/vendor/tasks/test-on-docker-host.sh
+        path: pipeline-tasks/ci/vendor/tasks/ssh-host-run.sh
     ensure:
-      put: docker-host
-      params:
-        release: docker-host
+      do:
+      - task: check-host-cleanup
+        input_mapping:
+          docker-host: docker-host-site1
+        config:
+          platform: linux
+          image_resource:
+            type: registry-image
+            source:
+              username: ((docker-creds.username))
+              password: ((docker-creds.password))
+              repository: us.gcr.io/galoy-org/rust-concourse
+          inputs:
+          - name: pipeline-tasks
+          - name: docker-host
+          - name: host-cleanup
+            optional: true
+          run:
+            path: bash
+            args:
+            - pipeline-tasks/ci/vendor/tasks/ssh-host-check-cleanup.sh
+      - put: docker-host-site1
+        params:
+          release: docker-host-site1
   on_failure:
     put: slack
     params:
@@ -197,7 +220,7 @@ jobs:
       run:
         path: pipeline-tasks/ci/tasks/set-dev-version.sh
       params:
-        BRANCH: fix-query-builder
+        BRANCH: main
   - put: repo
     params:
       repository: repo
@@ -210,7 +233,7 @@ resources:
     - ci/*[^md]
     fetch_tags: true
     uri: git@github.com:blinkbitcoin/sqlx-ledger.git
-    branch: fix-query-builder
+    branch: main
     private_key: ((github-blinkbitcoin.private_key))
   webhook_token: ((webhook.secret))
 - name: pipeline-tasks
@@ -222,7 +245,7 @@ resources:
     - ci/config/*
     - Makefile
     uri: git@github.com:blinkbitcoin/sqlx-ledger.git
-    branch: fix-query-builder
+    branch: main
     private_key: ((github-blinkbitcoin.private_key))
 - name: slack
   type: slack-notification
@@ -243,12 +266,12 @@ resources:
     owner: blinkbitcoin
     repository: sqlx-ledger
     access_token: ((github-blinkbitcoin.api_token))
-- name: docker-host
+- name: docker-host-site1
   type: pool
   source:
-    uri: git@github.com:GaloyMoney/concourse-locks.git
+    uri: git@github.com:blinkbitcoin/concourse-locks.git
     branch: main
-    pool: docker-hosts
+    pool: docker-hosts-site1
     private_key: ((github-blinkbitcoin.private_key))
 resource_types:
 - name: slack-notification
@@ -266,8 +289,8 @@ directories:
   path: ../.github/workflows/vendor
 - contents:
   - git:
-      commitTitle: 'chore: add webhook config'
-      sha: 9d0f008e41df2f5d5e0461171c02fc0c4aee1d6f
+      commitTitle: 'feat(ci): add site SSH Docker-host transport to the Docker-host fragments (#53)'
+      sha: 8d57537df5b5886176f42063cbcc2b4bf475259c
     path: .
   path: ./vendor
 kind: LockConfig
@@ -291,11 +314,18 @@ directories:
   contents:
   - path: .
     git:
-      url: https://github.com/GaloyMoney/concourse-shared.git
-      ref: 9d0f008e41df2f5d5e0461171c02fc0c4aee1d6f
+      url: https://github.com/blinkbitcoin/concourse-shared.git
+      ref: 8d57537df5b5886176f42063cbcc2b4bf475259c
     includePaths:
     - shared/ci/**/*
     excludePaths:
     - shared/ci/**/nodejs-*
     - shared/ci/**/chart-*
     newRootPath: shared/ci
+---
+version: 2
+updates:
+- package-ecosystem: cargo
+  directory: /
+  schedule:
+    interval: daily

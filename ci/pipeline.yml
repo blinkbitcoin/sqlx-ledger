@@ -30,7 +30,7 @@ groups:
 
 jobs:
 - #@ rust_check_code()
-- #@ test_on_docker_host("integration-tests")
+- #@ test_on_docker_host("integration-tests", site="site1")
 
 - name: release
   serial: true
@@ -131,7 +131,7 @@ resources:
 - #@ slack_resource()
 - #@ version_resource()
 - #@ gh_release_resource()
-- #@ docker_host_pool()
+- #@ docker_host_pool(site="site1")
 
 resource_types:
 - #@ slack_resource_type()

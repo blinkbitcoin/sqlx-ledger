@@ -20,8 +20,8 @@ directories:
   contents:
   - path: .
     git:
-      url: https://github.com/GaloyMoney/concourse-shared.git
-      ref: 9d0f008e41df2f5d5e0461171c02fc0c4aee1d6f
+      url: https://github.com/blinkbitcoin/concourse-shared.git
+      ref: 8d57537df5b5886176f42063cbcc2b4bf475259c
     includePaths:
     - shared/ci/**/*
     excludePaths:
